@@ -218,4 +218,4 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-Documents/Passwords/passwords.kdbx
+/KeePassXC/Documents/Passwords/passwords.kdbx
