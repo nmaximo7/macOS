@@ -3,3 +3,5 @@
 	email = nmaximo7@gmail.com
 [core]
 	editor = nvim
+[credential]
+	helper = store
