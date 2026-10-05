@@ -3,5 +3,10 @@
 	email = nmaximo7@gmail.com
 [core]
 	editor = nvim
+	excludesFile = /Users/nmaximo7/.gitignore_global
 [credential]
-	helper = store
+	helper = osxkeychain
+[pull]
+	rebase = true
+[push]
+	autoSetupRemote = true

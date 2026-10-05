@@ -1,0 +1,17 @@
+# Navigation
+alias ..='cd ..'
+alias ...='cd ../..'
+
+# Listing
+alias ll='ls -lah'
+
+# Editor
+alias v='nvim'
+alias vim='nvim'
+
+# Git shortcuts
+alias gs='git status -sb'
+alias gl='git log --oneline --graph --decorate -15'
+
+# Dotfiles
+alias dots='cd ~/dotfiles'
