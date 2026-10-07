@@ -1,0 +1,166 @@
+matches:
+  # Greek letters (lowercase, plus capitals where you use them)
+  - trigger: ";malpha"
+    replace: 'α $\alpha$'
+  - trigger: ";mbeta"
+    replace: 'β $\beta$'
+  - trigger: ";mgamma"
+    replace: 'γ $\gamma$'
+  - trigger: ";mdelta"
+    replace: 'δ $\delta$'
+  - trigger: ";mDelta"
+    replace: 'Δ $\Delta$'
+  - trigger: ";mepsilon"
+    replace: 'ε $\epsilon$'
+  - trigger: ";mzeta"
+    replace: 'ζ $\zeta$'
+  - trigger: ";meta"
+    replace: 'η $\eta$'
+  - trigger: ";mtheta"
+    replace: 'θ $\theta$'
+  - trigger: ";miota"
+    replace: 'ι $\iota$'
+  - trigger: ";mkappa"
+    replace: 'κ $\kappa$'
+  - trigger: ";mlambda"
+    replace: 'λ $\lambda$'
+  - trigger: ";mmu"
+    replace: 'μ $\mu$'
+  - trigger: ";mnu"
+    replace: 'ν $\nu$'
+  - trigger: ";mxi"
+    replace: 'ξ $\xi$'
+  - trigger: ";mpi"
+    replace: 'π $\pi$'
+  - trigger: ";mrho"
+    replace: 'ρ $\rho$'
+  - trigger: ";msigma"
+    replace: 'σ $\sigma$'
+  - trigger: ";mtau"
+    replace: 'τ $\tau$'
+  - trigger: ";mphi"
+    replace: 'φ $\varphi$'
+  - trigger: ";mPhi"
+    replace: 'Φ $\Phi$'
+  - trigger: ";mchi"
+    replace: 'χ $\chi$'
+  - trigger: ";mpsi"
+    replace: 'ψ $\psi$'
+  - trigger: ";momega"
+    replace: 'ω $\omega$'
+
+  # Set theory, logic, and relations
+  - trigger: ";mnotequal"
+    replace: '≠ $\neq$'
+  - trigger: ";mforall"
+    replace: '∀ $\forall$'
+  - trigger: ";mexists"
+    replace: '∃ $\exists$'
+  - trigger: ";min"
+    replace: '∈ $\in$'
+  - trigger: ";mnotin"
+    replace: '∉ $\notin$'
+  - trigger: ";msubset"
+    replace: '⊆ $\subseteq$'
+  - trigger: ";mpropersubset"
+    replace: '⊂ $\subset$'
+  - trigger: ";mnotsubset"
+    replace: '⊄ $\not\subset$'
+  - trigger: ";msuperset"
+    replace: '⊇ $\supseteq$'
+  - trigger: ";mpropersuperset"
+    replace: '⊃ $\supset$'
+  - trigger: ";munion"
+    replace: '∪ $\cup$'
+  - trigger: ";mintersect"
+    replace: '∩ $\cap$'
+  - trigger: ";mempty"
+    replace: '∅ $\emptyset$'
+  - trigger: ";mnatural"
+    replace: 'ℕ $\mathbb{N}$'
+  - trigger: ";minteger"
+    replace: 'ℤ $\mathbb{Z}$'
+  - trigger: ";mrational"
+    replace: 'ℚ $\mathbb{Q}$'
+  - trigger: ";mreal"
+    replace: 'ℝ $\mathbb{R}$'
+  - trigger: ";mcomplex"
+    replace: 'ℂ $\mathbb{C}$'
+  - trigger: ";mgreater"
+    replace: '> $>$'
+  - trigger: ";mgreatereq"
+    replace: '≥ $\geq$'
+  - trigger: ";mless"
+    replace: '< $<$'
+  - trigger: ";mlesseq"
+    replace: '≤ $\leq$'
+  - trigger: ";mimplies"
+    replace: '⇒ $\Rightarrow$'
+  - trigger: ";miff"
+    replace: '⇔ $\iff$'
+  - trigger: ";mapprox"
+    replace: '≈ $\approx$'
+  - trigger: ";mcongruent"
+    replace: '≡ $\equiv$'
+  - trigger: ";misomorphic"
+    replace: '≅ $\cong$'
+  - trigger: ";mrelated"
+    replace: '∼ $\sim$'
+  - trigger: ";mand"
+    replace: '∧ $\wedge$'
+  - trigger: ";mcontradiction"
+    replace: '⊥ $\bot$'
+  - trigger: ";mcomposition"
+    replace: '∘ $\circ$'
+  - trigger: ";mdirectsum"
+    replace: '⊕ $\oplus$'
+  - trigger: ";mnormal"
+    replace: '◁ $\triangleleft$'
+  - trigger: ";mcycle"
+    replace: '⟨a⟩ $\langle a \rangle$'
+  - trigger: ";mdiscriminant"
+    replace: 'Δ $\Delta$'
+  - trigger: ";mplusminus"
+    replace: '± $\pm$'
+  - trigger: ";mdot"
+    replace: '· $\cdot$'
+  - trigger: ";mnotdivide"
+    replace: '∤ $\nmid$'
+  - trigger: ";mdegree"
+    replace: '° $^\circ$'
+  - trigger: ";mfrac"
+    replace: '\frac{$|$}{}'
+  - trigger: ";mtext"
+    replace: '\text{$|$}'
+  - trigger: ";mexp"
+    replace: '^{$|$}'
+  - trigger: ";mbar"
+    replace: '\bar{$|$}'
+  - trigger: ";msqrt"
+    replace: '\sqrt{$|$}'
+  - trigger: ";msum"
+    replace: '\sum_{$|$}^{}'
+  - trigger: ";mprod"
+    replace: '\prod_{$|$}^{}'
+  - trigger: ";mlim"
+    replace: '\lim_{\Delta x \to 0} $|$'
+  - trigger: ";mfield"
+    replace: '\mathbb{F}'
+  - trigger: ";mdeltax"
+    replace: '\Delta x'
+  - trigger: ";mint"
+    replace: '\int $|$(x)dx'
+  - trigger: ";mintdef"
+    replace: '\int_{a}^{b} $|$(x)dx'
+  - trigger: ";meval"
+    replace: '\bigg|_{a}^{b}'
+  - trigger: ";mvect"
+    replace: '\vec{$|$v}'
+  - trigger: ";mmatrix"
+    replace: '$(\begin{smallmatrix}$|$ & 0\\ 0 & b\end{smallmatrix})$'
+  - trigger: ";mhat"
+    replace: '\hat{\mathbf{$|$T}}'
+  - trigger: ";mfunction"
+    replace: '$|$: A \to B'
+  - trigger: ";mproof"
+    replace: '∎ $\blacksquare$ QED, Quod Erat Demonstrandum✨ $|$'

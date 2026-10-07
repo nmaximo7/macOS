@@ -1,0 +1,65 @@
+matches:
+  # --- Writing & editing ---
+  - trigger: ";pclarify"
+    replace: "Could you please clarify, proofread, explain, and expand the explanation as much as possible to make it more comprehensive and accessible. Please be precise, verbose, avoid hallucinations, and do not worry about time, but precision. Thank you very much for your aid and support, I do appreciate it."
+
+  - trigger: ";pexplain"
+    replace: "Please explain the following concept as simply as possible, as if to someone with no background in the topic, then add a second, more technical explanation for someone with intermediate knowledge: $|$"
+
+  - trigger: ";psummarize"
+    replace: "Please summarize the following text into its key points, using short bullet points, without losing any critical detail: $|$"
+
+  - trigger: ";pexpand"
+    replace: "Please take the following short note and expand it into full, well-structured paragraphs, keeping the original meaning intact: $|$"
+
+  - trigger: ";prewrite"
+    replace: "Please rewrite the following text in a $|$ tone (e.g. formal, casual, persuasive, academic), keeping the same meaning and length roughly the same:\n\n"
+
+  - trigger: ";pemail"
+    replace: "Please draft a clear, polite, and professional email based on these bullet points. Keep it concise and easy to read:\n\n$|$"
+
+  - trigger: ";ptranslate"
+    replace: "Please translate the following text into $|$, and briefly note any nuance, idiom, or tone that doesn't translate directly:\n\n"
+
+  # --- Coding help ---
+  - trigger: ";pcode"
+    replace: "Please review the following code for bugs, readability, and efficiency. Explain each suggested change and why it improves the code:\n\n$|$"
+
+  - trigger: ";pdebug"
+    replace: "I'm getting the following error. Please explain the likely cause step by step, then suggest a fix:\n\n$|$"
+
+  - trigger: ";pcomment"
+    replace: "Please add clear comments and docstrings to the following code, explaining what each part does, without changing its behavior:\n\n$|$"
+
+  # --- Thinking & decisions ---
+  - trigger: ";pbrainstorm"
+    replace: "Please brainstorm as many distinct approaches or angles as possible for the following problem, briefly explaining each one: $|$"
+
+  - trigger: ";pproscons"
+    replace: "Please give a structured pros and cons list for the following decision, then a brief recommendation at the end: $|$"
+
+  - trigger: ";pcritique"
+    replace: "Please give an honest, constructive critique of the following, pointing out both strengths and weaknesses, and concrete suggestions to improve it: $|$"
+
+  # --- Study & work ---
+  - trigger: ";pquiz"
+    replace: "Please turn the following notes into a short self-test quiz (question and answer format) so I can check my understanding: $|$"
+
+  - trigger: ";pstudyplan"
+    replace: "Please build a study plan for learning $|$ within the following timeframe, broken into daily or weekly milestones: "
+
+  - trigger: ";pmeeting"
+    replace: "Please turn the following rough meeting notes into a clean summary with a clear list of action items and owners if mentioned: $|$"
+
+  - trigger: ";palttext"
+    replace: "Please write concise, accessible alt-text for an image showing: $|$"
+
+  # --- Image generation ---
+  - trigger: ";pimgplayground"
+    replace: "Could you draw this character (leave it as it is) in a vibrant playground setting. The scene should be framed in a 16:9 aspect ratio, ensuring that the character is the focal point while still capturing the lively atmosphere of the playground. Include elements such as swings, slides, and other playground equipment to enhance the environment in 16:9 format, cartoon mode."
+
+  - trigger: ";pimgportrait"
+    replace: "Could you draw this character (leave it as it is) as a portrait in $|$ style, framed in a 1:1 aspect ratio, with the character as the sole focal point against a simple, complementary background."
+
+  - trigger: ";pimgscene"
+    replace: "Could you draw this character (leave it as it is) in a $|$ setting. Frame the scene in 16:9 aspect ratio, keeping the character as the focal point while capturing the atmosphere and key details of the environment, in cartoon mode."

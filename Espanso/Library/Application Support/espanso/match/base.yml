@@ -1,0 +1,71 @@
+matches:
+  # Personal information
+  - trigger: ":name"
+    replace: "Máximo Núñez Alarcón"
+  - trigger: ":dni"
+    replace: "31661375N"
+  - trigger: ":address"
+    replace: "C/ Encarnación  Fontiveros nº5, 10 E. 29010  Málaga, España."
+  - trigger: ":telephone"
+    replace: "659353521"
+  - trigger: ":email"
+    replace: "nmaximo7@gmail.com"
+  - trigger: ":cvv"
+    replace: "737"
+  - trigger: ":bew"
+    replace: "Bupparchard Sa-ardchom"
+  - trigger: ":bewDetails"
+    replace: "3191100142529, 118 m.1 Mittraphap Muaklek 18180 (BarBoss Steak) Saraburi, Thailand. bupparchard@gmail.com. +668 59 286 657"
+
+  # Date, time, weather, network
+  - trigger: ":date"
+    replace: "{{mydate}}"
+    vars:
+      - name: mydate
+        type: date
+        params:
+          format: "%d/%m/%y"
+  - trigger: ":time"
+    replace: "{{time}}"
+    vars:
+      - name: time
+        type: date
+        params:
+          format: "%H:%M"
+  - trigger: ":now"
+    replace: "It's {{mytime}}"
+    vars:
+      - name: mytime
+        type: date
+        params:
+          format: "%H.%M"
+  - trigger: ":weather"
+    replace: "{{output}}"
+    vars:
+      - name: output
+        type: shell
+        params:
+          cmd: "curl 'http://wttr.in/?format=3'"
+  - trigger: ":ip"
+    replace: "{{output}}"
+    vars:
+      - name: output
+        type: shell
+        params:
+          cmd: "curl 'https://api.ipify.org'"
+
+  # Shell shortcuts
+  - trigger: ":edit"
+    replace: "{{output}}"
+    vars:
+      - name: output
+        type: shell
+        params:
+          cmd: "gedit /home/nmaximo7/.config/espanso/match/base.yml"
+  - trigger: ":quote"
+    replace: "{{output}}"
+    vars:
+      - name: output
+        type: shell
+        params:
+          cmd: "fortune"

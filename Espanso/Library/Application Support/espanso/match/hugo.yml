@@ -1,0 +1,71 @@
+matches:
+  - trigger: ";hhr"
+    replace: '<hr />'
+
+  - trigger: ";hspan"
+    replace: '<span>$|$</span>'
+
+  - trigger: ";hspancolor"
+    replace: '{{< span style="color:red;" text="$|$" >}}'
+
+  - trigger: ";hh1"
+    replace: '<h1>$|$</h1>'
+  - trigger: ";hh2"
+    replace: '<h2>$|$</h2>'
+  - trigger: ";hh3"
+    replace: '<h3>$|$</h3>'
+
+  - trigger: ";hpara"
+    replace: '<p>$|$</p>'
+
+  - trigger: ";hsup"
+    replace: '<sup>$|$</sup>'
+  - trigger: ";hsub"
+    replace: '<sub>$|$</sub>'
+
+  - trigger: ";hcode"
+    replace: "```\n$|$\n```"
+
+  - trigger: ";hcodelang"
+    replace: "```$|$\n\n```"
+
+  - trigger: ";hhighlight"
+    replace: '{{< highlight "$|$" >}}
+
+    {{< /highlight >}}'
+
+  - trigger: ";hborder"
+    replace: "{{% pborder %}}\n$|$\n{{% /pborder %}}"
+
+  - trigger: ";htable"
+    replace: |
+      {{<table "table table-dark table-striped table-bordered">}}
+      |   | 1 | -1|
+      |---|---|---|
+      | 1 | 1 | -1|
+      | 1 | -1| 1 |
+      {{</table>}}
+
+  - trigger: ";hlink"
+    replace: '[$|$]()'
+
+  - trigger: ";hmdlink"
+    replace: '[$|$]({{clipboard}})'
+    vars:
+      - name: "clipboard"
+        type: "clipboard"
+
+  - trigger: ";hhtmllink"
+    replace: '<a href="{{clipboard}}">$|$</a>'
+    vars:
+      - name: "clipboard"
+        type: "clipboard"
+
+  - trigger: ";himage"
+    replace: '![image info](/maths/image.png)'
+
+  - trigger: ";hfigure"
+    replace: '{{< figure src="$|$" alt="" caption="" >}}'
+
+  - trigger: ";hdetails"
+    replace: "<details><summary>$|$</summary>\n\n</details>"
