@@ -1,0 +1,171 @@
+# =============================================================================
+# AeroSpace config
+# Stow path : <dotfiles>/aerospace/.config/aerospace/aerospace.toml
+# Linked to : ~/.config/aerospace/aerospace.toml   (do NOT also keep ~/.aerospace.toml,
+#             AeroSpace reports an error when the config exists in both places)
+# Reload    : alt-shift-; then Esc   (or: aerospace reload-config)
+# Find IDs  : aerospace list-apps     (shows bundle IDs of running apps)
+# =============================================================================
+
+# Opt in to the newest config format. Required to set persistent-workspaces.
+config-version = 2
+
+# Launch AeroSpace automatically when you log in to macOS.
+start-at-login = true
+
+# Re-read this file whenever it is saved. Reload manually once after enabling.
+auto-reload-config = true
+
+
+# -----------------------------------------------------------------------------
+# AUTO-START APPS (runs once, every time AeroSpace starts)
+# -----------------------------------------------------------------------------
+# Each app is opened, then the on-window-detected rules below send its window
+# to the right workspace. `open -a` takes the app name as shown in /Applications.
+# If an app is already running, `open -a` just activates it.
+after-startup-command = [
+    'exec-and-forget open -a "Ghostty"',
+    'exec-and-forget open -a "Obsidian"',
+    'exec-and-forget open -a "Zen"',
+    'exec-and-forget open -a "Visual Studio Code"',
+    'exec-and-forget open -a "Deskflow"',
+    # Finder has no window by default, so open one on your home folder.
+    'exec-and-forget open -a "Finder" ~',
+    # After the apps had time to appear, land on the terminal workspace.
+    'exec-and-forget sleep 6; aerospace workspace T',
+]
+
+
+# -----------------------------------------------------------------------------
+# WORKSPACES
+# -----------------------------------------------------------------------------
+# Keep these workspaces alive even when empty, so they always exist and the
+# keyboard shortcuts work immediately.
+#   T = Terminal (Ghostty)     N = Notes (Obsidian)    W = Web (Zen)
+#   C = Code (VS Code)         D = Deskflow            F = Finder
+persistent-workspaces = ["T", "N", "W", "C", "D", "F"]
+
+
+# -----------------------------------------------------------------------------
+# LAYOUT: "maximized app per workspace"
+# -----------------------------------------------------------------------------
+# With ONE window per workspace and zero gaps, the window fills the screen.
+# This is AeroSpace's version of fullscreen. It does not use macOS native
+# fullscreen (which creates a separate macOS Space that AeroSpace can't manage).
+default-root-container-layout = 'tiles'
+default-root-container-orientation = 'auto'
+
+# Gaps between windows (inner) and screen edges (outer). 0 = edge to edge.
+# Raise them (e.g. 8) if you want a floating-card look.
+gaps.inner.horizontal = 0
+gaps.inner.vertical   = 0
+gaps.outer.left       = 0
+gaps.outer.bottom     = 0
+gaps.outer.top        = 0
+gaps.outer.right      = 0
+
+# Keep the tree tidy (recommended defaults).
+enable-normalization-flatten-containers = true
+enable-normalization-opposite-orientation-for-nested-containers = true
+
+# Padding shown for stacked windows in accordion layout.
+accordion-padding = 30
+
+# Focus changes only with the keyboard, not by hovering the mouse.
+focus-follows-mouse.enabled = false
+
+# When the focused monitor changes, move the mouse pointer to its center.
+on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
+
+# Disable macOS "Hide app" (Cmd+H): hidden apps are brought back automatically,
+# because hiding confuses a tiling manager.
+automatically-unhide-macos-hidden-apps = true
+
+# Keyboard layout used to interpret the key names below.
+key-mapping.preset = 'qwerty'
+
+
+# -----------------------------------------------------------------------------
+# AUTO-ASSIGN APPS TO WORKSPACES
+# -----------------------------------------------------------------------------
+# Whenever a new window appears, the first matching rule runs.
+# `if` uses the app's bundle ID (check yours with `aerospace list-apps`).
+# `run` moves the window to the workspace.
+on-window-detected = [
+    { if = 'test %{app-bundle-id} = com.mitchellh.ghostty',   run = 'move-node-to-workspace T' },
+    { if = 'test %{app-bundle-id} = md.obsidian',             run = 'move-node-to-workspace N' },
+    { if = 'test %{app-bundle-id} = app.zen-browser.zen',     run = 'move-node-to-workspace W' },
+    { if = 'test %{app-bundle-id} = com.microsoft.VSCode',    run = 'move-node-to-workspace C' },
+    { if = 'test %{app-bundle-id} = org.deskflow.deskflow',   run = 'move-node-to-workspace D' },
+    { if = 'test %{app-bundle-id} = com.apple.finder',        run = 'move-node-to-workspace F' },
+]
+
+
+# -----------------------------------------------------------------------------
+# KEYBINDINGS (main mode)
+# -----------------------------------------------------------------------------
+# alt = the Option key. Trade-off: Option+letter no longer types special
+# characters (like † on Option+t) in any app, because AeroSpace grabs them globally.
+[mode.main.binding]
+
+    # Jump to a workspace
+    alt-t = 'workspace T'
+    alt-n = 'workspace N'
+    alt-w = 'workspace W'
+    alt-c = 'workspace C'
+    alt-d = 'workspace D'
+    alt-f = 'workspace F'
+
+    # Send the focused window to a workspace (it stays where you are)
+    alt-shift-t = 'move-node-to-workspace T'
+    alt-shift-n = 'move-node-to-workspace N'
+    alt-shift-w = 'move-node-to-workspace W'
+    alt-shift-c = 'move-node-to-workspace C'
+    alt-shift-d = 'move-node-to-workspace D'
+    alt-shift-f = 'move-node-to-workspace F'
+
+    # Previous / next workspace (wraps around)
+    alt-left  = 'workspace --wrap-around prev'
+    alt-right = 'workspace --wrap-around next'
+
+    # Toggle between the current and the previous workspace
+    alt-tab = 'workspace-back-and-forth'
+
+    # AeroSpace fullscreen for the focused window (fills the screen, no gaps).
+    # Press again to restore. Independent of macOS native fullscreen.
+    alt-enter = 'fullscreen'
+
+    # Only needed when a workspace holds several windows (e.g. two Finder windows)
+    alt-h = 'focus left'
+    alt-j = 'focus down'
+    alt-k = 'focus up'
+    alt-l = 'focus right'
+    alt-shift-h = 'move left'
+    alt-shift-j = 'move down'
+    alt-shift-k = 'move up'
+    alt-shift-l = 'move right'
+
+    # Switch the layout of the current workspace: tiles <-> stacked accordion
+    alt-slash = 'layout tiles horizontal vertical'
+    alt-comma = 'layout accordion horizontal vertical'
+
+    # Resize tiles
+    alt-minus = 'resize smart -50'
+    alt-equal = 'resize smart +50'
+
+    # Enter service mode (reload, reset, float toggle)
+    alt-shift-semicolon = 'mode service'
+
+
+# -----------------------------------------------------------------------------
+# SERVICE MODE (alt-shift-; then one key, automatically returns to main)
+# -----------------------------------------------------------------------------
+[mode.service.binding]
+    # Reload this config and go back to main mode
+    esc = ['reload-config', 'mode main']
+    # Reset the layout of the current workspace
+    r = ['flatten-workspace-tree', 'mode main']
+    # Toggle the focused window between tiling and floating
+    f = ['layout floating tiling', 'mode main']
+    # Close every window in the workspace except the focused one
+    backspace = ['close-all-windows-but-current', 'mode main']
