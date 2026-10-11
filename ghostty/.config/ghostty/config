@@ -1,48 +1,225 @@
-# Ghostty config — symlinked to ~/.config/ghostty/config by scripts/install.sh
-# Validate:  ghostty +validate-config     Inspect:  ghostty +show-config
-# Reload:    Cmd+Shift+,
+# =============================================================================
+# Ghostty config (macOS)
+# Location : ~/.config/ghostty/config (symlinked by scripts/install.sh)
+# Validate : ghostty +validate-config
+# Inspect  : ghostty +show-config            (what is actually applied)
+# Reference: ghostty +show-config --default --docs   (every option, documented)
+# Reload   : Cmd+Shift+,
+# Note     : if ~/Library/Application Support/com.mitchellh.ghostty/config
+#            exists, it takes precedence over this file. Delete it if the
+#            settings below seem to be ignored.
+# =============================================================================
 
-# --- Look ---
-theme = Catppuccin Mocha
-font-family = JetBrains Mono
-font-size = 14
-adjust-cell-height = 10%
-cursor-style = bar
-cursor-style-blink = false
+
+# -----------------------------------------------------------------------------
+# THEME & COLORS
+# -----------------------------------------------------------------------------
+
+# Follows macOS appearance: Latte (light) by day, Mocha (dark) by night.
+# Use a single name (theme = Catppuccin Mocha) to pin one theme.
+# Browse all themes with a live preview: ghostty +list-themes
+theme = Dracula+
+
+# Window transparency: 1.0 = opaque, lower = more see-through.
 background-opacity = 0.95
+
+# Blurs whatever is behind the transparent window (macOS). Higher = blurrier.
 background-blur-radius = 20
+
+
+# -----------------------------------------------------------------------------
+# FONTS (Nerd Font icons work out of the box)
+# ------------------s-----------------------------------------------------------
+
+# Primary font. Ghostty bundles JetBrains Mono AND a Nerd Font symbols
+# fallback, so icons (starship, eza, lazygit, neovim, yazi) render without
+# installing anything.
+font-family = JetBrainsMono Nerd Font Mono
+
+# Alternative: a patched Nerd Font. Install it first with
+#   brew install --cask font-jetbrains-mono-nerd-font
+# then find the exact name with: ghostty +list-fonts | grep -i jetbrains
+# The "Mono" variant keeps every icon inside a single cell (no overlap).
+# font-family = JetBrainsMono Nerd Font Mono
+
+# Fallback chain: repeated keys are tried in order for missing glyphs.
+# Uncomment only if you use a non-patched primary font and see missing icons.
+# font-family = Symbols Nerd Font Mono
+# font-family = Apple Color Emoji
+
+# Font size in points. Zoom live with Cmd+= / Cmd+- / Cmd+0 (reset).
+font-size = 16 
+
+# Extra line spacing: +10% cell height makes text more readable.
+adjust-cell-height = 10%
+
+# Optional: disable ligatures (->, !=, ==> merging into single glyphs).
+# font-feature = -calt
+
+# Optional: slightly bolder text on macOS (useful on non-retina or light themes).
+# font-thicken = true
+
+
+# -----------------------------------------------------------------------------
+# CURSOR
+# -----------------------------------------------------------------------------
+
+# Shape: block, bar, underline, or block_hollow.
+cursor-style = bar
+
+# Disable blinking.
+cursor-style-blink = false
+
+
+# -----------------------------------------------------------------------------
+# WINDOW, TABS & LAYOUT
+# -----------------------------------------------------------------------------
+# Inner padding (in points) between the window edge and the text.
 window-padding-x = 10
 window-padding-y = 8
+
+# Spreads leftover pixels evenly so padding is symmetrical on all sides
+# instead of leaving a gap only at the bottom/right.
 window-padding-balance = true
+
+# Hides the mouse pointer while you type; it reappears when you move it.
 mouse-hide-while-typing = true
 
-# --- Window / tabs ---
+# Tabs live inside the titlebar (compact, native look). Alternatives:
+# native, transparent, hidden.
 macos-titlebar-style = tabs
+
+# Restores windows, tabs and splits when you relaunch Ghostty.
 window-save-state = always
+
+# New windows/tabs/splits open in the directory of the current one.
+# Requires shell integration (enabled below).
 window-inherit-working-directory = true
-confirm-close-surface = false
+
+# Ask for a terminal that still has a running
+# process (builds, SSH sessions, editors). Set to false to close silently.
+confirm-close-surface = true
+
+# Dims splits that are not focused (1.0 = no dimming) so you can see which
+# one is active.
 unfocused-split-opacity = 0.85
-fullscreen = true
 
-# --- Behaviour ---
-# Option works as Alt/Meta in vim, emacs, readline
+
+# -----------------------------------------------------------------------------
+# FULLSCREEN
+# -----------------------------------------------------------------------------
+
+# Every new window starts fullscreen. Toggle manually with Cmd+Ctrl+F.
+# Remove this line if you'd rather start windowed (or use `maximize = true`
+# to only fill the screen without entering fullscreen mode).
+# fullscreen = true
+
+# Optional: instant fullscreen with no macOS Space animation.
+# Values: true | false | visible-menu (keeps menu bar) | padded-notch (avoids notch)
+# macos-non-native-fullscreen = visible-menu
+
+
+# -----------------------------------------------------------------------------
+# KEYBOARD BEHAVIOUR
+# -----------------------------------------------------------------------------
+
+# Option key acts as Alt/Meta so vim, emacs and readline shortcuts
+# (Alt+b, Alt+f, Alt+d...) work. Trade-off: Option no longer types special
+# characters like é or ñ via Option+e / Option+n. Use "left" or "right" to
+# enable it on only one side and keep the other for special characters.
 macos-option-as-alt = true
+
+
+# -----------------------------------------------------------------------------
+# COPY & PASTE
+# -----------------------------------------------------------------------------
+# Basics: Cmd+C copy, Cmd+V paste, Cmd+A select all,
+# double-click = word, triple-click = line, Cmd+click opens URLs/paths.
+
+# Selecting text copies it to the system clipboard immediately (no Cmd+C).
+# "clipboard" is the right value on macOS. Set to false if you dislike your
+# clipboard being overwritten on every selection.
 copy-on-select = clipboard
+
+# Strips trailing whitespace from copied lines.
+clipboard-trim-trailing-spaces = true
+
+# Warns before pasting text that looks dangerous (e.g. multi-line commands).
+clipboard-paste-protection = true
+
+# OSC 52: lets programs (tmux, neovim over SSH) write to your Mac clipboard.
+# This is what makes remote yanking work.
+clipboard-write = allow
+
+# OSC 52: lets programs READ your clipboard. "ask" prompts you each time,
+# which is safer than "allow".
+clipboard-read = ask
+
+
+# -----------------------------------------------------------------------------
+# SCROLLBACK
+# -----------------------------------------------------------------------------
+
+# Scrollback buffer size in BYTES per terminal (25,000,000 = ~25 MB).
+# Default is 10 MB. Search it with Cmd+F.
 scrollback-limit = 25000000
+
+
+# -----------------------------------------------------------------------------
+# SHELL INTEGRATION
+# -----------------------------------------------------------------------------
+
+# Auto-detects bash, zsh, fish or elvish and injects integration.
+# Enables prompt jumping (Cmd+Up/Down), working-directory tracking and
+# smarter close confirmations.
 shell-integration = detect
-shell-integration-features = cursor,sudo,title
 
-# --- Keybinds ---
-keybind = cmd+d=new_split:right
-keybind = cmd+shift+d=new_split:down
-keybind = cmd+alt+left=goto_split:left
-keybind = cmd+alt+right=goto_split:right
-keybind = cmd+alt+up=goto_split:up
-keybind = cmd+alt+down=goto_split:down
-keybind = cmd+shift+enter=toggle_split_zoom
+# Features:
+#   cursor       - bar cursor at the prompt, restores shape in programs
+#   sudo         - keeps your terminfo working under sudo
+#   title        - sets the window title from the shell
+#   ssh-env      - falls back to TERM=xterm-256color on hosts that fail
+#   ssh-terminfo - copies Ghostty's terminfo to the remote host on `ssh`
+#                  (fixes "unknown terminal type xterm-ghostty")
+shell-integration-features = cursor,sudo,title,ssh-env,ssh-terminfo
 
-# Drop-down terminal from anywhere (needs Accessibility permission)
-keybind = global:ctrl+grave_accent=toggle_quick_terminal
-quick-terminal-position = top
-quick-terminal-screen = mouse
-quick-terminal-autohide = true
+
+# -----------------------------------------------------------------------------
+# KEYBINDS
+# -----------------------------------------------------------------------------
+# These are already macOS defaults, so they are not repeated here:
+#   Cmd+D            split right          Cmd+Shift+D       split down
+#   Cmd+Option+arrows move between splits Cmd+Shift+Enter   zoom split
+#   Cmd+Ctrl+arrows  resize split         Cmd+Ctrl+=        equalize splits
+# List defaults: ghostty +list-keybinds --default
+# Wipe all defaults and start clean: keybind = clear
+
+# Shift+Enter inserts a newline (multi-line prompts in CLI AI tools, chats).
+keybind = shift+enter=text:\n
+
+# Optional tmux-style leader sequences (press ctrl+a, release, then the key):
+# keybind = ctrl+a>c=new_tab
+# keybind = ctrl+a>n=next_tab
+# keybind = ctrl+a>p=previous_tab
+# keybind = ctrl+a>x=close_surface
+
+# Keybind prefixes:
+#   global:      works system-wide (needs Accessibility permission)
+#   unconsumed:  the key is also passed to the running program
+#   performable: triggers only if the action is possible, otherwise the key
+#                passes through to the program
+
+
+# -----------------------------------------------------------------------------
+# EXTRA
+# -----------------------------------------------------------------------------
+
+# Optional per-machine overrides. The "?" makes the file optional, so Ghostty
+# doesn't error if it doesn't exist. Handy to keep local tweaks out of git.
+config-file = ?local.conf
+
+# Optional: notification when a long command finishes (newer versions only;
+# confirm with `ghostty +show-config --default --docs | grep -i notify`).
+# notify-on-command-finish = unfocused
+initial-command = /Users/nmaximo7/macOS/bin/ghostty-dashboard
+

@@ -1,0 +1,69 @@
+{
+    // —————— Workbench ——————
+    "workbench.colorTheme": "Dark Modern",                 // any installed theme name
+    "workbench.iconTheme": "material-icon-theme",
+    "workbench.settings.editor": "json",                   // open settings.json instead of the Settings UI
+    "workbench.settings.openDefaultSettings": true,        // show read-only defaults next to your overrides
+    "workbench.editor.enablePreview": false,
+    "window.zoomLevel": 1,
+
+    // —————— Editor ——————
+    "editor.fontSize": 16,
+    "editor.fontFamily": "JetBrains Mono, Menlo, Monaco, monospace",   // Consolas is not on macOS
+    "editor.fontLigatures": true,                          // draw -> != == as single glyphs (visual only)
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,                           // PEP 8: 4 spaces, never tabs, formatters expect it
+    "editor.formatOnSave": true,
+    "editor.formatOnPaste": true,
+    "editor.accessibilitySupport": "off",
+    "editor.codeActionsOnSave": {
+        "source.fixAll": "explicit",                       // only on a manual save (Cmd+S)
+        "source.organizeImports": "explicit"
+    },
+
+    // —————— Files ——————
+    "files.trimTrailingWhitespace": true,
+    "files.trimFinalNewlines": true,
+    "files.insertFinalNewline": true,                      // POSIX/PEP 8 style: exactly one final newline
+    "files.autoSave": "afterDelay",                        // AUTO-SAVE
+    "files.autoSaveDelay": 1000,
+    "explorer.confirmDragAndDrop": false,
+    "explorer.confirmDelete": false,                       // Deleted files go to the Trash, still recoverable
+
+    // —————— Terminal ——————
+    "terminal.integrated.fontSize": 16,
+    "terminal.integrated.fontFamily": "JetBrains Mono, Menlo, monospace",
+    "terminal.integrated.scrollback": 20000,               // 1,000,000 lines eats RAM
+    "terminal.integrated.cursorStyle": "line",
+    "terminal.integrated.defaultProfile.osx": "zsh",
+
+    // —————— Python ——————
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",   // fallback, a .venv is also auto-detected
+    "python.envFile": "${workspaceFolder}/.env",
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",   // or "ms-python.autopep8" / "ms-python.black-formatter"
+        "editor.codeActionsOnSave": {
+            "source.fixAll.ruff": "explicit",
+            "source.organizeImports.ruff": "explicit"
+        }
+    },
+
+    // —————— Markdown (snippets need quick suggestions on) ——————
+    "[markdown]": {
+        "editor.quickSuggestions": { "other": "on", "comments": "off", "strings": "on" }
+    },
+
+    // —————— Code Runner (optional extension) ——————
+    "code-runner.clearPreviousOutput": true,
+    "code-runner.runInTerminal": true,
+    "code-runner.showExecutionMessage": false,
+    "code-runner.saveFileBeforeRun": true,
+    "code-runner.executorMap": {
+        "python": "$pythonPath -u $fullFileName"           // uses the interpreter selected in VS Code
+    },
+
+    // —————— Spell checker ——————
+    "cSpell.enabled": true,
+    "cSpell.language": "en,es",
+    "cSpell.diagnosticLevel": "Warning"                    // Error | Warning | Information | Hint
+}

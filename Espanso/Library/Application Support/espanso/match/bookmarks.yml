@@ -27,3 +27,8 @@ matches:
     replace: "https://www.perplexity.ai/"
   - trigger: ";bgemini"
     replace: "https://gemini.google.com/app"
+  - trigger: ";bglm"
+    replace: "https://chat.z.ai"
+  - trigger: ";bkeyboard"
+    replace: ";https://justtothepoint.com/software/keyboard/"
+

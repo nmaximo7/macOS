@@ -1,0 +1,15 @@
+#!/bin/zsh
+
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
+SESSION=dashboard
+
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+  exec tmux attach-session -t "$SESSION"
+fi
+
+tmux new-session -d -s "$SESSION" 'fastfetch; exec zsh'
+tmux split-window -h -t "$SESSION":0 'btop'
+tmux select-pane -t "$SESSION":0.0
+
+exec tmux attach-session -t "$SESSION"
+
