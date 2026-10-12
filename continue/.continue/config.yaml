@@ -1,0 +1,31 @@
+name: Local Ollama
+version: 1.0.0
+schema: v1
+
+models:
+  # Chat, inline edit and applying changes: the big model.
+  - name: Qwen3.6 27B
+    provider: ollama
+    model: qwen3.6:27b
+    roles:
+      - chat
+      - edit
+      - apply
+    defaultCompletionOptions:
+      contextLength: 16384      # raise to 32768 if `ollama ps` still says 100% GPU
+    capabilities:               # only needed if Continue does not auto-detect them (agent mode)
+      - tool_use
+
+  # Tab autocomplete: small and fast.
+  - name: Qwen2.5 Coder 1.5B
+    provider: ollama
+    model: qwen2.5-coder:1.5b
+    roles:
+      - autocomplete
+
+  # Codebase indexing (@codebase).
+  - name: Nomic Embed
+    provider: ollama
+    model: nomic-embed-text:latest
+    roles:
+      - embed
