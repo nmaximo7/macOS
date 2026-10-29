@@ -1,0 +1,8 @@
+"""Make the project's modules importable from the tests (they live in the parent folder)."""
+
+import sys
+from pathlib import Path
+
+ROOT = str(Path(__file__).resolve().parent.parent)
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)

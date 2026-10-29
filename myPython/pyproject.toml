@@ -1,0 +1,63 @@
+# pyproject.toml - project metadata and test configuration.
+#
+# The toolkit is a set of scripts, not an installable package yet (see the README,
+# "Improvements and future releases"). This file therefore does three things:
+#   1. documents the project (name, Python version, dependencies);
+#   2. configures pytest (where the tests are, and that the modules sit next to it);
+#   3. lets you install the tools used to develop it:   pip install -e ".[dev]"
+#
+# Run the tests:    python -m pytest          (or, without pytest:  python -m unittest discover -s tests -t .)
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hugo-content-toolkit"
+version = "0.16.0"
+description = "Read-only checks and proposals for Hugo Markdown pages: front matter, LaTeX, links, images, rendering and quotes."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "ollama",
+    "python-dotenv",
+    "rich",
+    "colorama",
+    "certifi",
+    "playwright",
+    "requests",
+    "beautifulsoup4",
+    "quotes_library",
+    "feedparser",
+    "yfinance",
+    "keyring",
+]
+# Keep this list equal to requirements.in; requirements.txt holds the pinned versions.
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools]
+# The modules are plain files in the project folder, not a package.
+py-modules = [
+    "content_creation",
+    "content_frontmatter",
+    "content_images",
+    "content_latex",
+    "content_links",
+    "content_quotes",
+    "content_render",
+    "content_urls",
+    "greetings",
+    "link_checker_page",
+    "myconfig",
+    "mymessages",
+    "myollama",
+    "openrouter",
+    "util",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

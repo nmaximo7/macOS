@@ -1,0 +1,29 @@
+# requirements.in - ONLY the packages the project imports (the "direct" dependencies).
+# requirements.txt is the full pinned list (direct + transitive) generated from this one.
+#
+#   Install what the project needs:    pip install -r requirements.txt
+#   Rebuild the pinned list (optional): pip install pip-tools
+#                                       pip-compile requirements.in -o requirements.txt
+#   Then run:  playwright install chromium     (browser used by content_render)
+
+# --- Core: front matter, LLM, configuration, reports
+ollama            # myconfig, myollama: client for the local Ollama server
+python-dotenv     # myconfig: reads .env   (provides `import dotenv`)
+rich              # almost every module: coloured reports, spinners, progress bars
+colorama          # util, greetings, myollama: ANSI colours
+certifi           # content_urls: up-to-date HTTPS certificates
+
+# --- Link / image / render checks
+playwright        # content_render: headless Chromium (needs `playwright install chromium`)
+requests          # greetings, link_checker_page, openrouter: HTTP calls
+beautifulsoup4    # link_checker_page: parses built HTML
+
+# --- Quotes
+quotes_library    # content_quotes: offline quote database (source "library", Python 3.11+)
+
+# --- Daily dashboard (greetings.py / util.py), each imported only when used
+feedparser        # RSS feeds
+yfinance          # stock prices
+
+# --- OpenRouter (openrouter.py)
+keyring           # API key in the system keychain
