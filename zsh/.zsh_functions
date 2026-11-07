@@ -1,0 +1,129 @@
+# =============================================================================
+# ~/.zsh_functions  (stow package: zsh/.zsh_functions)
+# A function is a small program living in your shell. Unlike an alias it can take arguments
+# anywhere ("$1", "$@"), use variables and make decisions.
+# =============================================================================
+
+# mkcd <dir>: create a folder (and parents) and go into it.
+mkcd() {
+    [[ -n $1 ]] || { echo "usage: mkcd <dir>"; return 1; }
+    mkdir -p -- "$1" && cd -- "$1"
+}
+
+# calc "3*4"  ->  12      (bc -l = math library, decimals work: calc "10/3")
+calc() { bc -l <<< "$*" }
+alias calc='noglob calc'     # noglob: `calc 3*4` also works without quotes
+
+# urlencode "hello world"  ->  hello+world
+urlencode() {
+    python3 -c 'import sys, urllib.parse as u; print(u.quote_plus(" ".join(sys.argv[1:])))' "$@"
+}
+
+# myripgrep <pattern>: search inside my Hugo content folder.
+myripgrep() { rg "$@" "$HOME/JustToThePoint/content/" }
+
+# mysearch <pattern>: same search, and open the same words in Google
+# (macOS: `open`, there is no xdg-open).
+mysearch() {
+    rg "$@" "$HOME/JustToThePoint/content/"
+    open "https://www.google.com/search?q=$(urlencode "$*")"
+}
+
+# searchEdit: fuzzy-find a config/script file with a preview, then open it in $EDITOR.
+# Handles spaces in names (-print0 / --read0 / xargs -0) and skips folders that do not exist.
+searchEdit() {
+    local -a dirs existing
+    local d
+    dirs=("$HOME/.config" "$DOTFILES" "$HOME/.local/bin" "$HOME/Dropbox")
+    for d in $dirs; do [[ -d $d ]] && existing+=("$d"); done
+    (( ${#existing} )) || { echo "searchEdit: no folder to search"; return 1; }
+    find "${existing[@]}" -type f -not -path '*/.git/*' -print0 \
+        | fzf --read0 --print0 --preview 'bat --style=numbers --color=always {}' \
+        | xargs -0 -o ${=EDITOR}
+}
+
+# ytmp3 <url>: download the audio of a video as mp3 into ~/Music.
+# youtube-dl is unmaintained, yt-dlp replaces it (brew install yt-dlp ffmpeg).
+# -P sets the download folder, so your shell stays where it is (the old version did cd).
+ytmp3() {
+    (( $+commands[yt-dlp] )) || { echo "brew install yt-dlp ffmpeg"; return 1; }
+    yt-dlp --extract-audio --audio-format mp3 -P "$HOME/Music" -o '%(title)s.%(ext)s' "$@"
+}
+
+# playmp3: play all mp3 files in ~/Music in random order (brew install mpv). Quit with q.
+playmp3() {
+    (( $+commands[mpv] )) || { echo "brew install mpv"; return 1; }
+    mpv --no-video --shuffle "$HOME"/Music/*.mp3
+}
+
+# free: memory summary (macOS has no `free`). Useful to check before loading a big model.
+free() {
+    top -l 1 -s 0 | grep PhysMem
+    memory_pressure | grep 'free percentage'
+}
+
+# killport <port>: stop whatever is listening on that port (a dev server that did not exit).
+killport() {
+    [[ -n $1 ]] || { echo "usage: killport <port>"; return 1; }
+    local pids
+    pids=$(lsof -ti tcp:"$1" -sTCP:LISTEN) || { echo "nothing is listening on port $1"; return 1; }
+    echo "killing PID(s): ${pids//$'\n'/ }"
+    echo "$pids" | xargs kill
+}
+
+# weather [city]: one-line weather from wttr.in
+weather() { curl -s "wttr.in/${1:-}?format=3" }
+
+# Archives: the Oh My Zsh `extract` plugin gives you `extract <file>` and `x <file>`.
+
+# ---
+# hugo-image-posts - Find which Hugo posts reference a given image file.
+#
+# Pass an image filename (or full path) and it prints the list of .md files
+# in your Hugo content directory that reference that image. It uses
+# ${1:t} so you can pass a full path and it still matches on the basename.
+#
+# Usage:
+#   hugo-image-posts hero.png
+#   hugo-image-posts /some/path/hero.png
+#
+# Requires: ripgrep (rg)
+# hugo-image-posts hero.png - Find which Hugo posts reference a given image file.
+hugo-image-posts() {
+  local content="/Volumes/MacDatosMaster/justtothepoint/content"
+  local image="${1:t}"  # Use the filename even if you pass a full path
+
+  if [[ -z "$1" ]]; then
+    print -u2 -- "Usage: hugo-image-posts <image-file>"
+    return 2
+  fi
+
+  if [[ ! -d "$content" ]]; then
+    print -u2 -- "Hugo content directory not found: $content"
+    return 1
+  fi
+
+  rg -F -l --sort path --hidden --no-ignore -g '*.md' -- "$image" "$content"
+}
+
+# 👋 Daily Briefing in my Python project
+greetings() {
+  cd "$HOME/macOS/myPython" || return
+  source .venv/bin/activate || return
+  python3 greetings.py
+}
+
+# 🚀 Start my webserver on a remote server Arch
+start_remote_webserver() {
+  ssh -t server -- zsh -lic 'webserver'
+}
+
+# 👩🏻‍💻 proposed front matter, check LaTeX/links/images, quotes, render well?, expand, searx
+content_creation() {
+  echo "Check regularly: python -m pytest. Content ~/hugo-expanded" || return
+  echo "Run bash ~/macOS/scripts/searx.sh removes a leftover container that isn’t running."
+  echo "If it fails, run docker rm -f searxng ; docker container prune -f"
+  cd "$HOME/macOS/myPython" || return
+  source .venv/bin/activate || return
+  python3 content_creation.py
+}

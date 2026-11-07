@@ -56,6 +56,18 @@ Variables understood in .env  (all optional - see .env.example)
     STOCK_TICKERS       tickers shown by greetings.py, separated by
                         spaces or commas                       (AAPL MSFT GOOGL ...)
 
+    OPENROUTER_MODEL    hosted model for call_openrouter() / expand_article:
+                        "openrouter/free" lets OpenRouter pick a free one,
+                        or a model id such as "vendor/model-name"       (openrouter/free)
+    OPENROUTER_TIMEOUT  seconds to wait for OpenRouter (long rewrites
+                        are slow)                                       (300)
+    OPENROUTER_MAX_TOKENS  cap on the length of the answer, in tokens   (none: model's default)
+    EXPAND_PROVIDER     who rewrites articles in content_expand.py:
+                        openrouter (hosted) or ollama (your local
+                        MYMODEL_QUERY)                                  (openrouter)
+    EXPAND_OUTPUT_DIR   folder where the expanded article is saved, OUTSIDE
+                        the Hugo content folder                         (~/hugo-expanded)
+
     AUTHOR              value of "author:" proposed by check_hugo_frontmatter
                         ("" = leave each page's own author alone)       (none)
     FEATURED_IMAGE      value of "featured_image:" proposed when a page has
@@ -89,6 +101,10 @@ DEFAULT_TIMEOUT = 600.0  # seconds; big local models can be slow
 DEFAULT_NUMBER_QUOTES = 3
 DEFAULT_QUOTE_SOURCES = ("file", "fortune")  # online sources are opt-in
 DEFAULT_WEATHER_LANG = "en"
+DEFAULT_OPENROUTER_MODEL = "openrouter/free"  # OpenRouter picks a free model for you
+DEFAULT_OPENROUTER_TIMEOUT = 300.0  # seconds; rewriting a long article takes minutes
+EXPAND_PROVIDERS = ("openrouter", "ollama")  # who can rewrite an article
+DEFAULT_EXPAND_PROVIDER = "openrouter"
 DEFAULT_STOCK_TICKERS = (  # major US stocks; change them with STOCK_TICKERS in .env
     "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "BRK-B", "NVDA", "META", "JPM", "V",
 )
@@ -124,6 +140,12 @@ class Settings:
     # --- Front matter (used by content_frontmatter.py) ---
     author: str = ""  # "" = do not propose an author, keep each page's own
     featured_image: str = ""  # "" = do not propose one
+    # --- Article expansion (used by openrouter.py and content_expand.py) ---
+    openrouter_model: str = DEFAULT_OPENROUTER_MODEL
+    openrouter_timeout: float = DEFAULT_OPENROUTER_TIMEOUT
+    openrouter_max_tokens: "int | None" = None  # None = let the model decide
+    expand_provider: str = DEFAULT_EXPAND_PROVIDER  # "openrouter" or "ollama"
+    expand_output_dir: "Path | None" = None  # None = ~/hugo-expanded
 
 
 # --------------------------------------------------------------------------- #
@@ -176,6 +198,18 @@ def _read_path(name: str):
     return Path(raw).expanduser() if raw else None
 
 
+def _read_provider(name: str, default: str) -> str:
+    """Read EXPAND_PROVIDER: only the names in EXPAND_PROVIDERS are accepted."""
+    raw = _read_text(name).lower()
+    if not raw:
+        return default
+    if raw not in EXPAND_PROVIDERS:
+        raise ValueError(
+            f"{name} in {ENV_PATH} must be one of {', '.join(EXPAND_PROVIDERS)}, got {raw!r}"
+        )
+    return raw
+
+
 def load_settings() -> Settings:
     """Build a Settings object from the CURRENT environment variables.
 
@@ -205,6 +239,13 @@ def load_settings() -> Settings:
         or DEFAULT_STOCK_TICKERS,
         author=_read_text("AUTHOR"),
         featured_image=_read_text("FEATURED_IMAGE"),
+        openrouter_model=_read_text("OPENROUTER_MODEL") or DEFAULT_OPENROUTER_MODEL,
+        openrouter_timeout=_read_number(
+            "OPENROUTER_TIMEOUT", DEFAULT_OPENROUTER_TIMEOUT, float
+        ),
+        openrouter_max_tokens=_read_number("OPENROUTER_MAX_TOKENS", None, int),
+        expand_provider=_read_provider("EXPAND_PROVIDER", DEFAULT_EXPAND_PROVIDER),
+        expand_output_dir=_read_path("EXPAND_OUTPUT_DIR"),
     )
 
 

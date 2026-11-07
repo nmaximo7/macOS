@@ -14,7 +14,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hugo-content-toolkit"
-version = "0.16.0"
+version = "0.18.0"
 description = "Read-only checks and proposals for Hugo Markdown pages: front matter, LaTeX, links, images, rendering and quotes."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -41,6 +41,7 @@ dev = ["pytest"]
 # The modules are plain files in the project folder, not a package.
 py-modules = [
     "content_creation",
+    "content_expand",
     "content_frontmatter",
     "content_images",
     "content_latex",

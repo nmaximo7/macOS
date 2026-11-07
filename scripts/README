@@ -1,0 +1,13 @@
+Setup.
+
+cd ~/macOS/scripts
+chmod +x ollama-start.sh ollama-stop.sh        # if the download lost the executable bit
+Two aliases: ai-on and ai-off
+
+Then ai-on before working and ai-off when you’re done.
+
+What ai-on does
+Server options. It runs your three launchctl setenv lines, then quits and restarts Ollama. Ollama only reads these variables when it starts, so setting them alone changes nothing. It also checks that both models are downloaded before closing anything, so a missing 18 GB download can’t leave you with your apps already closed.
+Quits Zen, Obsidian, Passwords and Safari. This is a real quit, like Cmd+Q. Closing a window with Cmd+W leaves the app in memory. It asks each app to quit, then waits up to 15 seconds. If one refuses, usually an unsaved-changes dialog, it tells you and carries on. --force kills it instead, and unsaved work is lost. --keep-apps skips this step.
+Loads the model. It sends Ollama a request with an empty prompt, which loads the model without generating text. It uses the same context length as Continue, and it also loads the small autocomplete model.
+Verifies and notifies. It runs ollama ps and checks the PROCESSOR column says 100% GPU. A CPU/GPU split means the model doesn’t fully fit and will be slow, so the notification says “ready, but slow” and why. Otherwise it says ready, with the free memory and any app that wouldn’t quit.

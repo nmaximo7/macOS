@@ -1,0 +1,6 @@
+#!/bin/bash
+# @raycast.schemaVersion 1
+# @raycast.title Run help.sh
+# @raycast.mode fullOutput
+
+exec /bin/sh "/Users/nmaximo7/macOS/scripts/help.sh" all

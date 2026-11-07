@@ -158,3 +158,210 @@ class LocalFileFor(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FindLatestPage(unittest.TestCase):
+    """content_creation.find_latest_page: the page edited last, found in the content folder."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.content = Path(self._tmp.name).resolve() / "content"
+
+    def page(self, rel, age_seconds, text="x"):
+        path = touch(self.content / rel, text)
+        import time
+
+        stamp = time.time() - age_seconds
+        os.utime(path, (stamp, stamp))
+        return path
+
+    def test_newest_wins(self):
+        self.page("a/old.md", 5000)
+        newest = self.page("b/c/new.md", 10)
+        self.page("a/mid.md", 900)
+        path, mtime = CC.find_latest_page(self.content)
+        self.assertEqual(path, newest)
+        self.assertGreater(mtime, 0)
+
+    def test_empty_content_folder(self):
+        self.content.mkdir(parents=True)
+        self.assertEqual(CC.find_latest_page(self.content), (None, 0))
+
+    def test_only_markdown_files_count(self):
+        self.page("a/page.md", 5000)
+        self.page("a/notes.txt", 1)
+        self.page("a/pic.png", 1)
+        self.page("a/page.html", 1)
+        self.assertEqual(CC.find_latest_page(self.content)[0].name, "page.md")
+
+    def test_markdown_extension_and_case(self):
+        self.page("a/one.md", 500)
+        newest = self.page("a/two.MARKDOWN", 5)
+        self.assertEqual(CC.find_latest_page(self.content)[0], newest)
+
+    def test_hidden_and_editor_files_are_ignored(self):
+        keep = self.page("a/real.md", 5000)
+        self.page(".git/hidden.md", 1)
+        self.page("a/.hidden.md", 1)
+        self.page("a/.#lock.md", 1)
+        self.page("a/backup.md~", 1)
+        self.assertEqual(CC.find_latest_page(self.content)[0], keep)
+
+    def test_section_index_is_ignored_unless_asked(self):
+        article = self.page("calculus/stokes.md", 5000)
+        index = self.page("calculus/_index.md", 1)
+        self.assertEqual(CC.find_latest_page(self.content)[0], article)
+        self.assertEqual(CC.find_latest_page(self.content, include_index=True)[0], index)
+
+    def test_leaf_bundle_index_md_is_a_real_page(self):
+        bundle = self.page("calculus/stokes/index.md", 1)
+        self.page("calculus/other.md", 5000)
+        self.assertEqual(CC.find_latest_page(self.content)[0], bundle)
+
+    def test_same_time_gives_a_stable_answer(self):
+        a = self.page("a.md", 100)
+        b = self.page("b.md", 100)
+        os.utime(b, (os.stat(a).st_atime, os.stat(a).st_mtime))
+        first = CC.find_latest_page(self.content)[0]
+        self.assertEqual(first, CC.find_latest_page(self.content)[0])
+        self.assertEqual(first.name, "b.md")
+
+    def test_ago(self):
+        self.assertEqual(CC._ago(3), "a few seconds ago")
+        self.assertEqual(CC._ago(60), "1 minute ago")
+        self.assertEqual(CC._ago(7300), "2 hours ago")
+        self.assertEqual(CC._ago(3 * 86400 + 5), "3 days ago")
+
+
+class NoPageGiven(unittest.TestCase):
+    """python3 content_creation.py  (no argument)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name).resolve()
+        self.old = touch(self.root / "content" / "calculus" / "old.md")
+        self.new = touch(self.root / "content" / "calculus" / "new.md")
+        os.utime(self.old, (1_000_000, 1_000_000))
+
+    def run_quiet(self, settings, *args, **kwargs):
+        """Run CC.main with these settings; return (exit code, everything it printed)."""
+        printed = []
+        with mock.patch("myconfig.get_settings", return_value=settings), \
+                mock.patch.object(CC.console, "print", side_effect=lambda *a, **k: printed.append(str(a[0]) if a else "")):
+            code = CC.main(*args, **kwargs)
+        return code, "\n".join(printed)
+
+    def test_the_latest_page_is_checked(self):
+        seen = []
+
+        def fake_run_checks(page, only=None, skip=None, show_ok=True):
+            seen.append(Path(page))
+            return [CC.StepResult("a", "A", CC.OK)]
+
+        with mock.patch.object(CC, "run_checks", fake_run_checks):
+            code, out = self.run_quiet(SimpleNamespace(hugo_root=self.root))
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, [self.new])
+        self.assertIn("most recently modified", out)
+
+    def test_options_are_passed_on(self):
+        captured = {}
+
+        def fake_run_checks(page, only=None, skip=None, show_ok=True):
+            captured.update(only=only, skip=skip, show_ok=show_ok)
+            return []
+
+        with mock.patch.object(CC, "run_checks", fake_run_checks):
+            self.run_quiet(SimpleNamespace(hugo_root=self.root), only=["links"], show_ok=False)
+        self.assertEqual(captured, {"only": ["links"], "skip": None, "show_ok": False})
+
+    def test_without_hugo_root_it_is_a_usage_error(self):
+        code, out = self.run_quiet(SimpleNamespace(hugo_root=None))
+        self.assertEqual(code, 2)
+        self.assertIn("HUGO_ROOT", out)
+
+    def test_missing_content_folder(self):
+        code, out = self.run_quiet(SimpleNamespace(hugo_root=self.root / "nowhere"))
+        self.assertEqual(code, 2)
+
+    def test_no_markdown_at_all(self):
+        empty = self.root / "empty"
+        (empty / "content").mkdir(parents=True)
+        code, out = self.run_quiet(SimpleNamespace(hugo_root=empty))
+        self.assertEqual(code, 2)
+        self.assertIn("no Markdown page", out)
+
+    def test_cli_page_is_optional(self):
+        with mock.patch.object(CC, "main", return_value=0) as main:
+            self.assertEqual(CC.cli([]), 0)
+        self.assertIsNone(main.call_args.args[0])
+
+    def test_cli_passes_the_expand_options(self):
+        with mock.patch.object(CC, "main", return_value=0) as main:
+            CC.cli(["p.md", "--provider", "ollama", "--model", "m", "--copy", "--no-save", "--include-index"])
+        kw = main.call_args.kwargs
+        self.assertEqual(kw["expand_options"], {"provider": "ollama", "model": "m", "temperature": None, "copy": True, "save": False})
+        self.assertTrue(kw["include_index"])
+
+    def test_cli_rejects_an_unknown_provider(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            CC.cli(["p.md", "--provider", "bing"])
+
+
+class ExpandStep(unittest.TestCase):
+    def test_expand_is_the_last_step_and_can_be_selected(self):
+        self.assertEqual(CC.STEP_KEYS[-1], "expand")
+        self.assertEqual(len(CC.STEP_KEYS), 7)
+
+    def test_provider_names_match_the_configuration(self):
+        import myconfig
+
+        self.assertEqual(CC.EXPAND_PROVIDERS, myconfig.EXPAND_PROVIDERS)
+
+    def result(self, **kw):
+        import content_expand as E
+
+        base = dict(text="t", provider="openrouter", model="m", words_before=10, words_after=30, seconds=1.0, saved_to=Path("/x/y.md"))
+        base.update(kw)
+        return E.Expansion(**base)
+
+    def test_clean_rewrite_is_a_proposal(self):
+        with mock.patch("content_expand.expand_article", return_value=self.result()):
+            status, detail = CC._step_expand(Path("p.md"), True)
+        self.assertEqual(status, CC.PROPOSAL)
+        self.assertIn("10 -> 30 words", detail)
+        self.assertIn("/x/y.md", detail)
+
+    def test_rewrite_with_warnings_is_a_problem(self):
+        with mock.patch("content_expand.expand_article", return_value=self.result(warnings=["placeholder"])), \
+                contextlib.redirect_stdout(io.StringIO()):
+            status, detail = CC._step_expand(Path("p.md"), True)
+        self.assertEqual(status, CC.PROBLEMS)
+        self.assertIn("1 issue", detail)
+
+    def test_no_api_key_means_could_not_run(self):
+        import content_expand as E
+
+        with mock.patch("content_expand.expand_article", side_effect=E.ExpandError("No OpenRouter API key found.\n(more)")), \
+                contextlib.redirect_stdout(io.StringIO()):
+            status, detail = CC._step_expand(Path("p.md"), True)
+        self.assertEqual(status, CC.UNCHECKED)
+        self.assertEqual(detail, "No OpenRouter API key found.")
+
+    def test_options_reach_expand_article_and_do_not_leak_between_calls(self):
+        calls = []
+
+        def fake(page, **kwargs):
+            calls.append(kwargs)
+            return self.result()
+
+        with mock.patch("content_expand.expand_article", fake), mock.patch.object(CC, "find_page", return_value=(Path("p.md"), [])), \
+                mock.patch.object(CC, "STEPS", [("expand", "Expanded text", CC._step_expand)]), contextlib.redirect_stdout(io.StringIO()):
+            CC.main("p.md", expand_options={"provider": "ollama", "copy": True})
+            CC.main("p.md")
+        self.assertEqual(calls[0]["provider"], "ollama")
+        self.assertTrue(calls[0]["copy"])
+        self.assertIsNone(calls[1]["provider"])
+        self.assertFalse(calls[1]["copy"])

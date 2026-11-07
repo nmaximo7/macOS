@@ -29,6 +29,7 @@ after-startup-command = [
     'exec-and-forget open -a "Zen"',
     'exec-and-forget open -a "Visual Studio Code"',
     'exec-and-forget open -a "Deskflow"',
+    'exec-and-forget open -a "Safari"',
     # Finder has no window by default, so open one on your home folder.
     'exec-and-forget open -a "Finder" ~',
     # After the apps had time to appear, land on the terminal workspace.
@@ -41,9 +42,10 @@ after-startup-command = [
 # -----------------------------------------------------------------------------
 # Keep these workspaces alive even when empty, so they always exist and the
 # keyboard shortcuts work immediately.
-#   T = Terminal (Ghostty)     N = Notes (Obsidian)    W = Web (Zen)
-#   C = Code (VS Code)         D = Deskflow            F = Finder
-persistent-workspaces = ["T", "N", "W", "C", "D", "F"]
+#   T = Terminal (Ghostty)     O = Obsidian     Z = Zen/S = Safari
+#   C = Code (VS Code)         D = Deskflow     F = Finder
+#   V = OpenClaw (Vibe Coding)
+persistent-workspaces = ["T", "O", "W", "C", "D", "F", "S", "Z", "V"]
 
 
 # -----------------------------------------------------------------------------
@@ -93,11 +95,13 @@ key-mapping.preset = 'qwerty'
 # `run` moves the window to the workspace.
 on-window-detected = [
     { if = 'test %{app-bundle-id} = com.mitchellh.ghostty',   run = 'move-node-to-workspace T' },
-    { if = 'test %{app-bundle-id} = md.obsidian',             run = 'move-node-to-workspace N' },
-    { if = 'test %{app-bundle-id} = app.zen-browser.zen',     run = 'move-node-to-workspace W' },
+    { if = 'test %{app-bundle-id} = md.obsidian',             run = 'move-node-to-workspace O' },
+    { if = 'test %{app-bundle-id} = app.zen-browser.zen',     run = 'move-node-to-workspace Z' },
     { if = 'test %{app-bundle-id} = com.microsoft.VSCode',    run = 'move-node-to-workspace C' },
     { if = 'test %{app-bundle-id} = org.deskflow.deskflow',   run = 'move-node-to-workspace D' },
+    { if = 'test %{app-bundle-id} = com.apple.Safari',        run = 'move-node-to-workspace S' },
     { if = 'test %{app-bundle-id} = com.apple.finder',        run = 'move-node-to-workspace F' },
+    { if = 'test %{app-bundle-id} = ai.openclaw.mac',         run = 'move-node-to-workspace V' },
 ]
 
 
@@ -110,19 +114,23 @@ on-window-detected = [
 
     # Jump to a workspace
     alt-t = 'workspace T'
-    alt-n = 'workspace N'
-    alt-w = 'workspace W'
+    alt-o = 'workspace O'
+    alt-z = 'workspace Z'
     alt-c = 'workspace C'
     alt-d = 'workspace D'
     alt-f = 'workspace F'
+    alt-s = 'workspace S'
+    alt-v = 'workspace V'
 
     # Send the focused window to a workspace (it stays where you are)
     alt-shift-t = 'move-node-to-workspace T'
-    alt-shift-n = 'move-node-to-workspace N'
-    alt-shift-w = 'move-node-to-workspace W'
+    alt-shift-o = 'move-node-to-workspace O'
+    alt-shift-z = 'move-node-to-workspace Z'
     alt-shift-c = 'move-node-to-workspace C'
     alt-shift-d = 'move-node-to-workspace D'
     alt-shift-f = 'move-node-to-workspace F'
+    alt-shift-s = 'move-node-to-workspace S'
+    alt-shift-v = 'move-node-to-workspace V'
 
     # Previous / next workspace (wraps around)
     alt-left  = 'workspace --wrap-around prev'

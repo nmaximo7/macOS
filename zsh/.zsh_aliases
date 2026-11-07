@@ -1,17 +1,98 @@
-# Navigation
+# =============================================================================
+# ~/.zsh_aliases  (stow package: zsh/.zsh_aliases)
+# An alias is a short text substitution: it is expanded when you press Enter.
+# Anything that needs arguments in the middle, or logic, lives in ~/.zsh_functions.
+# Loaded AFTER Oh My Zsh, so an alias here overrides a plugin alias of the same name.
+# `(( $+commands[tool] ))` is true when `tool` is installed, so nothing breaks on a new Mac.
+# =============================================================================
+
+# ---- Navigation -------------------------------------------------------------
 alias ..='cd ..'
 alias ...='cd ../..'
+alias ....='cd ../../..'
+alias dots='cd "$DOTFILES"'
+# AUTO_CD is on: typing a folder name alone also changes into it. `d` (OMZ) lists the
+# folder stack, `cd -2` jumps back to entry 2.
 
-# Listing
-alias ll='ls -lah'
+# ---- Listing: eza when installed (brew install eza), plain ls otherwise ----------
+if (( $+commands[eza] )); then
+    alias ls='eza --icons=auto --group-directories-first'
+    alias ll='eza -lah --git --header --icons=auto --group-directories-first'   # long, hidden, git status
+    alias la='eza -a --icons=auto --group-directories-first'
+    alias lt='eza --tree --level=2 --icons=auto --git-ignore'                   # tree, 2 levels
+else
+    alias ls='ls -G'
+    alias ll='ls -lAhG'
+    alias la='ls -A'
+fi
 
-# Editor
-alias v='nvim'
-alias vim='nvim'
+# ---- Editor / shell ------------------------------------------------------------
+if (( $+commands[nvim] )); then
+    alias v='nvim'
+    alias vim='nvim'
+    alias vi='nvim'
+fi
+alias ezsh='$EDITOR ~/.zshrc'
+alias ealias='$EDITOR ~/.zsh_aliases'
+alias efunc='$EDITOR ~/.zsh_functions'
+alias reload='exec zsh'                          # a fresh shell: cleaner than `source ~/.zshrc`
+alias myhelp='sh ~/macOS/scripts/help.sh'
+alias zshbench='time zsh -i -c exit'             # startup time, aim for < 0.3 s
+alias zshprof='ZPROF=1 zsh -i -c exit'           # which part of startup is slow
 
-# Git shortcuts
-alias gs='git status -sb'
-alias gl='git log --oneline --graph --decorate -15'
+# ---- Git -------------------------------------------------------------------------
+# Not defined here on purpose, the Oh My Zsh `git` plugin already has better ones:
+#   gst = status, gsb = status -sb (your old `gs`), glog = log --oneline --graph --decorate
+#   gl  = git pull (your old `gl` would have overridden it), gp = push, gco, gcb, gaa, gcmsg
+# Your old `gs` also hid Ghostscript, whose command is `gs`.
+(( $+commands[lazygit] )) && alias lg='lazygit'
 
-# Dotfiles
-alias dots='cd ~/dotfiles'
+# ---- Local AI (Ollama + Continue) -------------------------------------------------
+alias ai-on="$DOTFILES/scripts/ollama-start.sh"      # set options, quit apps, load the model
+alias ai-off="$DOTFILES/scripts/ollama-stop.sh"      # unload the model, quit Ollama
+alias ai-ps='ollama ps'                              # what is loaded, "100% GPU" is what you want
+alias ai-ls='ollama list'                            # downloaded models
+
+# ---- Clipboard (macOS: pbcopy/pbpaste, not xclip) -------------------------------------
+alias copy='pbcopy'                                  # git diff | copy
+alias paste='pbpaste'
+
+# ---- System ------------------------------------------------------------------------
+alias df='df -h'                                     # human-readable sizes
+alias du1='du -h -d 1 | sort -hr'                    # size of each item in this folder, biggest first
+alias mem='top -l 1 -s 0 | grep PhysMem'             # macOS has no `free` command
+alias ports='lsof -iTCP -sTCP:LISTEN -n -P'          # what is listening on which port
+alias path='print -l $path'                          # one PATH entry per line
+alias flushdns='sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder'
+alias myip='curl -s https://api.ipify.org; echo'     # public IP (https, unlike the old http one)
+alias localip='ipconfig getifaddr en0 || ipconfig getifaddr en1'   # Mac Studio: en0 = Ethernet or Wi-Fi
+alias grep='grep --color=auto'
+alias cp='cp -i'                                     # ask before overwriting
+alias mv='mv -i'
+
+# ---- Homebrew --------------------------------------------------------------------------
+alias brewup='brew update && brew upgrade && brew cleanup'
+alias brewdump='brew bundle dump --force --file="$DOTFILES/Brewfile"'   # save installed apps into your repo
+
+# ---- macOS -------------------------------------------------------------------------------
+alias o='open'
+alias oo='open .'                                    # open this folder in Finder
+alias ghostty-validate='ghostty +validate-config'
+
+# ---- Files: preview with fzf + bat ----------------------------------------------------------
+alias preview="fzf --preview 'bat --style=numbers --color=always {}'"
+
+# ---- Optional, only if installed ---------------------------------------------------------------
+if [[ -f ~/.config/myquotes/quotes ]] && (( $+commands[fortune] )); then
+    alias fortune='fortune ~/.config/myquotes/quotes'   # your own quotes (needs: strfile quotes)
+fi
+(( $+commands[curseradio] )) && alias radio='curseradio'
+
+# ---- Servers -------------------------------------------------------------------------------------
+# Better than an alias: define the server once in ~/.ssh/config, then just run `ssh server`
+# (also works for scp, rsync, git and VS Code Remote):
+#
+#   Host server
+#       HostName yourIpServer
+#       User yourUser
+#       Port 2222

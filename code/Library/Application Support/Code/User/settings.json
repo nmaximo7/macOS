@@ -65,5 +65,7 @@
     // —————— Spell checker ——————
     "cSpell.enabled": true,
     "cSpell.language": "en,es",
-    "cSpell.diagnosticLevel": "Warning"                    // Error | Warning | Information | Hint
+    "cSpell.diagnosticLevel": "Warning",
+    "workbench.startupEditor": "none",
+    "security.workspace.trust.untrustedFiles": "open" // Error | Warning | Information | Hint
 }

@@ -21,8 +21,18 @@ Remove the key again:
 
 From Python:
 
-    from openrouter import ask_openrouter
-    text, model_used = ask_openrouter("Hello!")
+    from openrouter import ask_openrouter, call_openrouter
+    text, model_used = ask_openrouter("Hello!")                   # low level: you give the system text
+    text, model_used = call_openrouter("Raycast Launcher")        # like myollama.call_ollama: a PROMPT NAME
+    text, model_used = call_openrouter(article, prompt="expand_article")
+
+call_openrouter() uses the same prompt names as myollama.py (they live in mymessages.py:
+query_expand, check_proof, expand_article...) and the settings OPENROUTER_MODEL,
+OPENROUTER_TIMEOUT and OPENROUTER_MAX_TOKENS of .env.
+
+From the command line, the same prompts:
+
+    python3 openrouter.py "Raycast Launcher" --system query_expand
 
 Where the key is looked for, in this order:
     1. the keychain   (service "justtothepoint-toolkit", user "OPENROUTER_API_KEY")
@@ -37,6 +47,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import os
+import re
 import sys
 
 import requests
@@ -48,6 +59,7 @@ import requests
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "openrouter/free"  # OpenRouter picks a free model for you
 DEFAULT_TIMEOUT = 60.0  # seconds to wait for the answer
+MAX_CONTENT_CHARS = 100_000  # refuse absurdly long input (same limit as myollama.py)
 
 # Where the key is saved in the keychain
 KEYRING_SERVICE = "justtothepoint-toolkit"
@@ -166,13 +178,17 @@ def ask_openrouter(
     model: str = DEFAULT_MODEL,
     timeout: float = DEFAULT_TIMEOUT,
     system: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> tuple:
     """Send `prompt` to OpenRouter. Returns (answer text, name of the model that answered).
 
-    prompt:  what you want to ask.
-    model:   OpenRouter model id; "openrouter/free" lets OpenRouter pick a free one.
-    timeout: seconds to wait before giving up.
-    system:  optional system message (instructions for the model).
+    prompt:      what you want to ask.
+    model:       OpenRouter model id; "openrouter/free" lets OpenRouter pick a free one.
+    timeout:     seconds to wait before giving up.
+    system:      optional system message (instructions for the model).
+    temperature: 0 (precise) ... 2 (creative); None = the model's default.
+    max_tokens:  cap on the length of the answer; None = the model's default.
 
     Raises OpenRouterError for every expected problem.
     """
@@ -184,6 +200,12 @@ def ask_openrouter(
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
+    body = {"model": model, "messages": messages}
+    if temperature is not None:
+        body["temperature"] = temperature
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
+
     try:
         response = requests.post(
             API_URL,
@@ -191,7 +213,7 @@ def ask_openrouter(
                 "Authorization": f"Bearer {get_api_key()}",
                 "Content-Type": "application/json",
             },
-            json={"model": model, "messages": messages},
+            json=body,
             timeout=timeout,
         )
     except requests.Timeout:
@@ -214,6 +236,74 @@ def ask_openrouter(
 
 
 # --------------------------------------------------------------------------- #
+# The same idea as myollama.call_ollama: choose WHAT to do by prompt name     #
+# --------------------------------------------------------------------------- #
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove the <think>...</think> block that some reasoning models add."""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def call_openrouter(
+    content: str,
+    prompt="query_expand",
+    model: str | None = None,
+    timeout: float | None = None,
+    temperature: float | None = 0.7,
+    max_tokens: int | None = None,
+    show: bool = False,
+    strip_thinking: bool = True,
+) -> tuple:
+    """Send `content` to OpenRouter with a named system prompt. Returns (answer, model used).
+
+    content:        the text you want the model to work on (e.g. an article).
+    prompt:         WHAT to do with it: a name from mymessages.py ("query_expand",
+                    "check_proof", "expand_article"...) or your own
+                    {"role": "system", "content": "..."} dictionary.
+    model:          None = OPENROUTER_MODEL of .env ("openrouter/free" if not set).
+    timeout:        None = OPENROUTER_TIMEOUT of .env (300 seconds if not set).
+    temperature:    0 ... 2, default 0.7 (the same as call_ollama).
+    max_tokens:     None = OPENROUTER_MAX_TOKENS of .env, or the model's own default.
+    show:           print the answer (False: only return it).
+    strip_thinking: remove a <think>...</think> block.
+
+    Raises ValueError for a bad argument or an unknown prompt name, and OpenRouterError
+    for everything that goes wrong with the request (no key, network, HTTP error...).
+    """
+    # Imported here so that `python3 openrouter.py "Hello!"` keeps working with only
+    # `requests` and `keyring` installed.
+    import mymessages
+    from myconfig import get_settings
+
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("content must be a non-empty string")
+    if len(content) > MAX_CONTENT_CHARS:
+        raise ValueError(
+            f"content is too long ({len(content)} characters, maximum {MAX_CONTENT_CHARS})"
+        )
+    if temperature is not None and not 0 <= temperature <= 2:
+        raise ValueError("temperature must be a number between 0 and 2")
+
+    settings = get_settings()
+    system_message = mymessages.resolve_prompt(prompt)
+    text, model_used = ask_openrouter(
+        content,
+        model=model or settings.openrouter_model,
+        timeout=timeout or settings.openrouter_timeout,
+        system=system_message["content"],
+        temperature=temperature,
+        max_tokens=max_tokens or settings.openrouter_max_tokens,
+    )
+    if strip_thinking:
+        text = _strip_thinking(text)
+    if show:
+        print(f"--- Response from model {model_used} ---")
+        print(text)
+    return text, model_used
+
+
+# --------------------------------------------------------------------------- #
 # Command line                                                                #
 # --------------------------------------------------------------------------- #
 
@@ -229,6 +319,11 @@ def cli(argv=None) -> int:
         "--timeout", type=float, default=DEFAULT_TIMEOUT, help="seconds (default: 60)"
     )
     parser.add_argument(
+        "--system",
+        metavar="NAME",
+        help="use a system prompt of mymessages.py, e.g. query_expand, check_proof, expand_article",
+    )
+    parser.add_argument(
         "--set-key", action="store_true", help="save your API key in the keychain and exit"
     )
     parser.add_argument(
@@ -242,11 +337,17 @@ def cli(argv=None) -> int:
             print("Saved to the keychain.")
         elif args.delete_key:
             print("Removed from the keychain." if delete_api_key() else "No key was saved.")
+        elif args.system:
+            text, model_used = call_openrouter(
+                args.prompt, prompt=args.system, model=args.model, timeout=args.timeout
+            )
+            print(text)
+            print("Model used:", model_used)
         else:
             text, model_used = ask_openrouter(args.prompt, args.model, args.timeout)
             print(text)  # answer from the selected model
             print("Model used:", model_used)  # which model OpenRouter chose
-    except OpenRouterError as exc:
+    except (OpenRouterError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0

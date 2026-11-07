@@ -1,0 +1,75 @@
+# This script automates the creation of a single session with two panes side-by-side. 
+# One runs "webserver" remotely using SSH. The second one runs btop.  
+# A tmux server is a long-lived background daemon. Your terminal only ever hosts a client that talks to that server. 
+# Sessions, windows, and panes live in the server, not in your terminal — which is why they survive closing the terminal.
+
+# 1. Shebang. The script uses Zsh as its interpreter, which is standard on modern macOS.
+#!/bin/zsh
+
+# 2. This prepends Homebrew's binary directories to your PATH. 
+# This is crucial because tmux commands run from a script may not inherit your interactive shell's full path. I
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
+
+# 3. Defines variables for reusability. 
+SESSION="dashboard"
+SSH_TARGET="server" # Change to your user@host
+
+# 4. This is the "check-then-create" block. 
+# tmux has-session -t "$SESSION" asks the server “does this session exist?”.
+# Exit code 0 = yes, non-zero = no. It prints an error to stderr when the session is missing.
+# 2>/dev/null throws that error message away; only the exit status matters.
+# If the dashboard session already exists → **attach and exit**.
+# Idempotency: rerun the script → you reattach to the live dashboard instead of building a second one.
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+  exec tmux attach-session -t "$SESSION"
+fi
+
+# 5. Creating the session (detached, with the SSH command)
+# tmux new-session -d -s "$SESSION" -n "main"
+# -d detached: create the session but don’t attach the client. 
+# Essential for scripting — lets you finish configuring the layout before showing anything.
+# -s "$SESSION": session name (dashboard).
+# -n "main": window name (main). 
+# final arg: shell command run in the first pane. 
+# The string that tmux actually receives is: ssh -tt "server" 'zsh -lic "webserver; exec zsh -li"' || zsh
+# The remote command is: zsh -lic "webserver; exec zsh -li"
+# (1) Run webserver (-c run the given command string: webserver). 
+# (2) exec zsh -li — replace the remote zsh with a fresh interactive login shell. The pane stays alive and usable after webserver finishes.
+# The local || zsh. If ssh itself fails, the local pane shell runs zsh, 
+# so the pane stays open showing ssh’s error and giving you a usable local shell
+if ! tmux new-session -d -s "$SESSION" -n "main" \
+  "ssh -tt \"$SSH_TARGET\" 'zsh -lic \"webserver; exec zsh -li\"' || { \
+     echo; \
+     echo 'SSH failed. Manual recovery:'; \
+     echo '  1) ssh $SSH_TARGET'; \
+     echo '  2) webserver'; \
+     echo '  3) exec zsh -li   (optional: fresh login shell)'; \
+     echo; \
+     exec zsh; \
+   }"; then
+  print -u2 "Error: failed to create tmux session '$SESSION'."
+  print -u2 "Manual recovery: tmux new -s $SESSION → ssh $SSH_TARGET → webserver"
+  exit 1
+fi
+
+# 6. Configure the layout. Split horizontally and run btop if available.
+# command -v btop prints the resolved path of btop if it exists; 
+# exit 0 if found, non-zero if not. >/dev/null 2>&1 silences the path/error output. 
+# split-window -h: -h means horizontal split, which arranges panes side by side (kind of confusing)
+# -t "$SESSION:main": target = the active pane of window main. 
+# 'btop' is passed to default-shell -c.  
+if command -v btop >/dev/null 2>&1; then
+  tmux split-window -h -t "$SESSION:main" 'btop'
+else
+  tmux split-window -h -t "$SESSION:main" 'echo "btop is not installed"; exec zsh'
+fi
+
+# 7. Pane titles and focus.
+# -T title sets the pane’s pane_title
+tmux select-pane -t "$SESSION:main.0" -T "SSH: $SSH_TARGET"
+tmux select-pane -t "$SESSION:main.1" -T "btop"
+tmux select-pane -t "$SESSION:main.0"
+
+# 8. Attaches the current terminal as a client to dashboard and lets tmux take over the screen.
+exec tmux attach-session -t "$SESSION"
+

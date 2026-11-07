@@ -48,7 +48,7 @@ font-family = JetBrainsMono Nerd Font Mono
 # font-family = Apple Color Emoji
 
 # Font size in points. Zoom live with Cmd+= / Cmd+- / Cmd+0 (reset).
-font-size = 16 
+font-size = 16
 
 # Extra line spacing: +10% cell height makes text more readable.
 adjust-cell-height = 10%
@@ -221,5 +221,4 @@ config-file = ?local.conf
 # Optional: notification when a long command finishes (newer versions only;
 # confirm with `ghostty +show-config --default --docs | grep -i notify`).
 # notify-on-command-finish = unfocused
-initial-command = /Users/nmaximo7/macOS/bin/ghostty-dashboard
-
+initial-command = /Users/nmaximo7/macOS/scripts/ghostty-dashboard

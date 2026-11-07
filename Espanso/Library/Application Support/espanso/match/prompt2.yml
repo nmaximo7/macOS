@@ -23,16 +23,19 @@ matches:
       replace: |
         Please review and improve the following technical article. It is written for a Hugo site and includes a YAML front matter header. \
         1. YAML Front Matter Header Optimization: \
-        * Maintain, but update, all existing metadata (keywords, featured_image, description, author, language, weight, math, title, date, categories). \
+        * Maintain, but update, all existing metadata. \
+        * The metadata should be updated to the current content of the article. \
+        * keywords format: keywords: Maths, Learn Math, math, mathematics, school,... \
         * Clean up formatting: Ensure the keywords are formatted neatly, keys are standardized, and there are no YAML syntax errors. \
-        * If any standard Hugo fields are missing or could be optimized for a math tutorial, please suggest them. \
         2. Content Correction & Improvement: \
         * Proofread the main article content for grammar, punctuation, and English spelling. \
+        * Provide a ready to "copy and paste" list with the lines where mistakes are made (indicating clearly where they could be found, e.g., section, paragraph, etc.) \
+        and the correction.
         * Clean up any mathematical notation (ensure LaTeX formatting is correct and consistent since `math: true` is enabled). \
         Here is the markdown content:
     - trigger: ";pvideo"
       replace: |
-        You are an expert AI Video Prompt Engineer specializing in generating precise, cinematic prompts for AI video tools (like Google Flow, Veo, and Runway). \ 
+        You are an expert AI Video Prompt Engineer specializing in generating precise, cinematic prompts for AI video tools (like Google Flow, Veo, and Runway). \
         Your goal is to transform the user's brief concept into highly descriptive, engaging 10-second video prompts. \
         For every request, generate a clear, unified prompt that includes: \
         1. Subject & Action: What the character is doing. \
@@ -40,7 +43,12 @@ matches:
         3. Lighting: The exact mood, direction, and color temperature of the light. \
         4. Camera Movement: Smooth cinematic motions (e.g., slow pan, subtle tracking shot, dramatic zoom). \
         5. Visual Style: High-fidelity, cinematic parameters (e.g., photorealistic, 35mm lens, film grain). \
-        # Character Rules for Jesus \
-        Jesus is already a character, @MyJesus. \ 
+        # Character Rules for Jesus only when it appears \
+        Jesus is already a character, @MyJesus. \
         # Output Structure \
         Provide the final output inside a clean code block so it is easy to copy and paste. Do not include conversational fluff before the prompt.
+    - trigger: ";pthumbnail"
+      replace: |
+        Create an eye-catching YouTube thumbnail using the image I uploaded as the base. \
+        Add the title ‘Talk to Me’ in large, bold, easy-to-read text.
+        Make sure the text stands out clearly and the design is clean and engaging, while keeping the main subject of the original image visible.

@@ -102,3 +102,32 @@ class Values(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ArticleExpansionSettings(unittest.TestCase):
+    def test_defaults(self):
+        s = load()
+        self.assertEqual(s.openrouter_model, C.DEFAULT_OPENROUTER_MODEL)
+        self.assertEqual(s.openrouter_timeout, C.DEFAULT_OPENROUTER_TIMEOUT)
+        self.assertIsNone(s.openrouter_max_tokens)
+        self.assertEqual(s.expand_provider, "openrouter")
+        self.assertIsNone(s.expand_output_dir)
+
+    def test_values_are_read(self):
+        s = load(OPENROUTER_MODEL='"vendor/some-model:free"', OPENROUTER_TIMEOUT="900", OPENROUTER_MAX_TOKENS="8000",
+                 EXPAND_PROVIDER=" Ollama ", EXPAND_OUTPUT_DIR="~/drafts")
+        self.assertEqual(s.openrouter_model, "vendor/some-model:free")
+        self.assertEqual(s.openrouter_timeout, 900.0)
+        self.assertEqual(s.openrouter_max_tokens, 8000)
+        self.assertEqual(s.expand_provider, "ollama")
+        self.assertEqual(s.expand_output_dir, Path("~/drafts").expanduser())
+
+    def test_unknown_provider_names_the_variable(self):
+        with self.assertRaises(ValueError) as ctx:
+            load(EXPAND_PROVIDER="bing")
+        self.assertIn("EXPAND_PROVIDER", str(ctx.exception))
+
+    def test_bad_number_names_the_variable(self):
+        with self.assertRaises(ValueError) as ctx:
+            load(OPENROUTER_TIMEOUT="soon")
+        self.assertIn("OPENROUTER_TIMEOUT", str(ctx.exception))

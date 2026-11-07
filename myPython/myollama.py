@@ -60,17 +60,10 @@ console = Console()
 def available_prompts() -> dict:
     """Return {name: prompt_dict} for every valid prompt found in mymessages.py.
 
-    A valid prompt is any public variable of mymessages.py that is a dictionary
-    containing the keys 'role' and 'content'.
+    (Since v0.18 the lookup lives in mymessages.py so that openrouter.py shares it;
+    this function is kept so existing code keeps working.)
     """
-    return {
-        name: value
-        for name, value in vars(mymessages).items()
-        if not name.startswith("_")  # ignore private names
-        and isinstance(value, dict)
-        and "role" in value
-        and "content" in value
-    }
+    return mymessages.available_prompts()
 
 
 def resolve_prompt(prompt) -> dict:
@@ -82,21 +75,7 @@ def resolve_prompt(prompt) -> dict:
     Raises:
         ValueError: unknown name, or a dictionary without 'role' and 'content'.
     """
-    # Case 1: the caller passed a dictionary directly -> just check its shape.
-    if isinstance(prompt, dict):
-        if "role" not in prompt or "content" not in prompt:
-            raise ValueError("a prompt dictionary must have 'role' and 'content' keys")
-        return prompt
-
-    # Case 2: the caller passed a name -> look it up in mymessages.py.
-    prompts = available_prompts()
-    if isinstance(prompt, str) and prompt in prompts:
-        return prompts[prompt]
-
-    # Anything else: explain what the valid choices are (much friendlier than a KeyError).
-    raise ValueError(
-        f"unknown prompt {prompt!r}. Available prompts: {', '.join(sorted(prompts)) or '(none found)'}"
-    )
+    return mymessages.resolve_prompt(prompt)
 
 
 # --------------------------------------------------------------------------- #
