@@ -116,7 +116,7 @@ hugo-image-posts() {
 # your prompt stays where it was. The venv's python is called directly (no `activate` needed).
 greetings() {
   local proj="$HOME/macOS/myPython"
-  [[ -x "$proj/.venv/bin/python" ]] || { print -u2 "greetings: no virtualenv in $proj (see doc/mypython.md, section 5)"; return 1; }
+  [[ -x "$proj/.venv/bin/python" ]] || { print -u2 "greetings: no virtualenv in $proj (see ~/macOS/docs/docMymac/mypython.md, section 5)"; return 1; }
   ( cd "$proj" && .venv/bin/python greetings.py "$@" )
 }
 
@@ -135,6 +135,6 @@ start_remote_webserver() {
 # The hints on what to do after an error are printed by the program itself, at the end of its summary.
 content_creation() {
   local proj="$HOME/macOS/myPython"
-  [[ -x "$proj/.venv/bin/python" ]] || { print -u2 "content_creation: no virtualenv in $proj (see doc/mypython.md, section 5)"; return 1; }
+  [[ -x "$proj/.venv/bin/python" ]] || { print -u2 "content_creation: no virtualenv in $proj (see ~/macOS/docs/docMymac/mypython.md, section 5)"; return 1; }
   ( cd "$proj" && .venv/bin/python content_creation.py "$@" )
 }

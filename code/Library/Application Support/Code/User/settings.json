@@ -23,6 +23,7 @@
     "files.trimTrailingWhitespace": true,
     "files.trimFinalNewlines": true,
     "files.insertFinalNewline": true, // AUTO-SAVE
+    "files.autoSave": "afterDelay",
     "files.autoSaveDelay": 1000,
     "explorer.confirmDragAndDrop": false,
     "explorer.confirmDelete": false, // Deleted files go to the Trash, still recoverable

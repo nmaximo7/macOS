@@ -50,7 +50,9 @@ class FindPage(unittest.TestCase):
         self.assertEqual(len(tried), 3)
 
     def test_without_hugo_root_only_the_given_path_is_tried(self):
-        with mock.patch("myconfig.get_settings", return_value=SimpleNamespace(hugo_root=None)):
+        with mock.patch(
+            "myconfig.get_settings", return_value=SimpleNamespace(hugo_root=None)
+        ):
             path, tried = CC.find_page("calculus/p.md")
         self.assertIsNone(path)
         self.assertEqual(len(tried), 1)
@@ -66,7 +68,9 @@ class MainExitCodes(unittest.TestCase):
             return CC.main(*args, **kwargs)
 
     def test_missing_page_is_exit_code_2(self):
-        with mock.patch("myconfig.get_settings", return_value=SimpleNamespace(hugo_root=None)):
+        with mock.patch(
+            "myconfig.get_settings", return_value=SimpleNamespace(hugo_root=None)
+        ):
             self.assertEqual(self.run_main("/does/not/exist.md"), 2)
 
     def test_counted(self):
@@ -75,8 +79,20 @@ class MainExitCodes(unittest.TestCase):
         self.assertEqual(CC._counted(3, "link"), (CC.PROBLEMS, "3 link problem(s)"))
 
     def test_status_needs_attention(self):
-        flags = {s: CC.StepResult("k", "K", s).needs_attention for s in (CC.OK, CC.PROPOSAL, CC.PROBLEMS, CC.UNCHECKED, CC.ERROR)}
-        self.assertEqual(flags, {CC.OK: False, CC.PROPOSAL: False, CC.PROBLEMS: True, CC.UNCHECKED: True, CC.ERROR: True})
+        flags = {
+            s: CC.StepResult("k", "K", s).needs_attention
+            for s in (CC.OK, CC.PROPOSAL, CC.PROBLEMS, CC.UNCHECKED, CC.ERROR)
+        }
+        self.assertEqual(
+            flags,
+            {
+                CC.OK: False,
+                CC.PROPOSAL: False,
+                CC.PROBLEMS: True,
+                CC.UNCHECKED: True,
+                CC.ERROR: True,
+            },
+        )
 
     def test_crashing_step_does_not_stop_the_others(self):
         def boom(page, show_ok):
@@ -86,7 +102,10 @@ class MainExitCodes(unittest.TestCase):
             return CC.OK, "fine"
 
         steps = [("a", "A", boom), ("b", "B", fine)]
-        with mock.patch.object(CC, "STEPS", steps), contextlib.redirect_stdout(io.StringIO()):
+        with (
+            mock.patch.object(CC, "STEPS", steps),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
             results = CC.run_checks("x.md")
             code = CC.print_summary(results)
         self.assertEqual([r.status for r in results], [CC.ERROR, CC.OK])
@@ -103,7 +122,10 @@ class MainExitCodes(unittest.TestCase):
             return step
 
         steps = [(k, k, make(k)) for k in ("a", "b", "c")]
-        with mock.patch.object(CC, "STEPS", steps), contextlib.redirect_stdout(io.StringIO()):
+        with (
+            mock.patch.object(CC, "STEPS", steps),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
             CC.run_checks("x.md", only=["a", "c"], skip=["c"])
         self.assertEqual(ran, ["a"])
 
@@ -125,19 +147,32 @@ class LocalFileFor(unittest.TestCase):
         touch(self.public / "File.txt")
 
     def test_directory_url(self):
-        self.assertEqual(LC.local_file_for(self.public, "/a/b/"), self.public / "a" / "b" / "index.html")
+        self.assertEqual(
+            LC.local_file_for(self.public, "/a/b/"),
+            self.public / "a" / "b" / "index.html",
+        )
 
     def test_root(self):
-        self.assertEqual(LC.local_file_for(self.public, "/"), self.public / "index.html")
+        self.assertEqual(
+            LC.local_file_for(self.public, "/"), self.public / "index.html"
+        )
 
     def test_directory_url_without_final_slash(self):
-        self.assertEqual(LC.local_file_for(self.public, "/a/b"), self.public / "a" / "b" / "index.html")
+        self.assertEqual(
+            LC.local_file_for(self.public, "/a/b"),
+            self.public / "a" / "b" / "index.html",
+        )
 
     def test_html_extension_is_added(self):
-        self.assertEqual(LC.local_file_for(self.public, "/page"), self.public / "page.html")
+        self.assertEqual(
+            LC.local_file_for(self.public, "/page"), self.public / "page.html"
+        )
 
     def test_url_encoded_names(self):
-        self.assertEqual(LC.local_file_for(self.public, "/img/my%20pic.png"), self.public / "img" / "my pic.png")
+        self.assertEqual(
+            LC.local_file_for(self.public, "/img/my%20pic.png"),
+            self.public / "img" / "my pic.png",
+        )
 
     def test_missing_file(self):
         self.assertIsNone(LC.local_file_for(self.public, "/nope/"))
@@ -212,7 +247,9 @@ class FindLatestPage(unittest.TestCase):
         article = self.page("calculus/stokes.md", 5000)
         index = self.page("calculus/_index.md", 1)
         self.assertEqual(CC.find_latest_page(self.content)[0], article)
-        self.assertEqual(CC.find_latest_page(self.content, include_index=True)[0], index)
+        self.assertEqual(
+            CC.find_latest_page(self.content, include_index=True)[0], index
+        )
 
     def test_leaf_bundle_index_md_is_a_real_page(self):
         bundle = self.page("calculus/stokes/index.md", 1)
@@ -248,8 +285,14 @@ class NoPageGiven(unittest.TestCase):
     def run_quiet(self, settings, *args, **kwargs):
         """Run CC.main with these settings; return (exit code, everything it printed)."""
         printed = []
-        with mock.patch("myconfig.get_settings", return_value=settings), \
-                mock.patch.object(CC.console, "print", side_effect=lambda *a, **k: printed.append(str(a[0]) if a else "")):
+        with (
+            mock.patch("myconfig.get_settings", return_value=settings),
+            mock.patch.object(
+                CC.console,
+                "print",
+                side_effect=lambda *a, **k: printed.append(str(a[0]) if a else ""),
+            ),
+        ):
             code = CC.main(*args, **kwargs)
         return code, "\n".join(printed)
 
@@ -274,7 +317,9 @@ class NoPageGiven(unittest.TestCase):
             return []
 
         with mock.patch.object(CC, "run_checks", fake_run_checks):
-            self.run_quiet(SimpleNamespace(hugo_root=self.root), only=["links"], show_ok=False)
+            self.run_quiet(
+                SimpleNamespace(hugo_root=self.root), only=["links"], show_ok=False
+            )
         self.assertEqual(captured, {"only": ["links"], "skip": None, "show_ok": False})
 
     def test_without_hugo_root_it_is_a_usage_error(self):
@@ -300,9 +345,29 @@ class NoPageGiven(unittest.TestCase):
 
     def test_cli_passes_the_expand_options(self):
         with mock.patch.object(CC, "main", return_value=0) as main:
-            CC.cli(["p.md", "--provider", "ollama", "--model", "m", "--copy", "--no-save", "--include-index"])
+            CC.cli(
+                [
+                    "p.md",
+                    "--provider",
+                    "ollama",
+                    "--model",
+                    "m",
+                    "--copy",
+                    "--no-save",
+                    "--include-index",
+                ]
+            )
         kw = main.call_args.kwargs
-        self.assertEqual(kw["expand_options"], {"provider": "ollama", "model": "m", "temperature": None, "copy": True, "save": False})
+        self.assertEqual(
+            kw["expand_options"],
+            {
+                "provider": "ollama",
+                "model": "m",
+                "temperature": None,
+                "copy": True,
+                "save": False,
+            },
+        )
         self.assertTrue(kw["include_index"])
 
     def test_cli_rejects_an_unknown_provider(self):
@@ -313,7 +378,10 @@ class NoPageGiven(unittest.TestCase):
 class ExpandStep(unittest.TestCase):
     def test_expand_is_the_last_step_and_can_be_selected(self):
         self.assertEqual(CC.STEP_KEYS[-1], "expand")
-        self.assertEqual(len(CC.STEP_KEYS), 7)
+        self.assertEqual(len(CC.STEP_KEYS), 8)
+        self.assertEqual(
+            CC.STEP_KEYS[-2], "searx"
+        )  # the research must come BEFORE the rewrite that uses it
 
     def test_provider_names_match_the_configuration(self):
         import myconfig
@@ -323,7 +391,15 @@ class ExpandStep(unittest.TestCase):
     def result(self, **kw):
         import content_expand as E
 
-        base = dict(text="t", provider="openrouter", model="m", words_before=10, words_after=30, seconds=1.0, saved_to=Path("/x/y.md"))
+        base = dict(
+            text="t",
+            provider="openrouter",
+            model="m",
+            words_before=10,
+            words_after=30,
+            seconds=1.0,
+            saved_to=Path("/x/y.md"),
+        )
         base.update(kw)
         return E.Expansion(**base)
 
@@ -335,8 +411,13 @@ class ExpandStep(unittest.TestCase):
         self.assertIn("/x/y.md", detail)
 
     def test_rewrite_with_warnings_is_a_problem(self):
-        with mock.patch("content_expand.expand_article", return_value=self.result(warnings=["placeholder"])), \
-                contextlib.redirect_stdout(io.StringIO()):
+        with (
+            mock.patch(
+                "content_expand.expand_article",
+                return_value=self.result(warnings=["placeholder"]),
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
             status, detail = CC._step_expand(Path("p.md"), True)
         self.assertEqual(status, CC.PROBLEMS)
         self.assertIn("1 issue", detail)
@@ -344,8 +425,13 @@ class ExpandStep(unittest.TestCase):
     def test_no_api_key_means_could_not_run(self):
         import content_expand as E
 
-        with mock.patch("content_expand.expand_article", side_effect=E.ExpandError("No OpenRouter API key found.\n(more)")), \
-                contextlib.redirect_stdout(io.StringIO()):
+        with (
+            mock.patch(
+                "content_expand.expand_article",
+                side_effect=E.ExpandError("No OpenRouter API key found.\n(more)"),
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
             status, detail = CC._step_expand(Path("p.md"), True)
         self.assertEqual(status, CC.UNCHECKED)
         self.assertEqual(detail, "No OpenRouter API key found.")
@@ -357,11 +443,117 @@ class ExpandStep(unittest.TestCase):
             calls.append(kwargs)
             return self.result()
 
-        with mock.patch("content_expand.expand_article", fake), mock.patch.object(CC, "find_page", return_value=(Path("p.md"), [])), \
-                mock.patch.object(CC, "STEPS", [("expand", "Expanded text", CC._step_expand)]), contextlib.redirect_stdout(io.StringIO()):
+        with (
+            mock.patch("content_expand.expand_article", fake),
+            mock.patch.object(CC, "find_page", return_value=(Path("p.md"), [])),
+            mock.patch.object(
+                CC, "STEPS", [("expand", "Expanded text", CC._step_expand)]
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
             CC.main("p.md", expand_options={"provider": "ollama", "copy": True})
             CC.main("p.md")
         self.assertEqual(calls[0]["provider"], "ollama")
         self.assertTrue(calls[0]["copy"])
         self.assertIsNone(calls[1]["provider"])
         self.assertFalse(calls[1]["copy"])
+
+
+class HowToFix(unittest.TestCase):
+    """The summary tells the user which commands to try for each check that needs attention."""
+
+    def _r(self, key, status, detail):
+        return CC.StepResult(key, key, status, detail)
+
+    def test_ok_and_proposal_have_no_hints(self):
+        self.assertEqual(CC.how_to_fix(self._r("searx", CC.OK, "")), [])
+        self.assertEqual(
+            CC.how_to_fix(self._r("searx", CC.PROPOSAL, "8 result(s)")), []
+        )
+
+    def test_searx_not_running_points_to_the_script(self):
+        text = "\n".join(
+            CC.how_to_fix(
+                self._r(
+                    "searx",
+                    CC.UNCHECKED,
+                    "SearXNG is not running at http://127.0.0.1:8080",
+                )
+            )
+        )
+        self.assertIn("searx.sh start", text)
+        self.assertIn("--skip searx", text)
+
+    def test_searx_specific_errors(self):
+        self.assertIn(
+            "json",
+            "\n".join(
+                CC.how_to_fix(self._r("searx", CC.UNCHECKED, "HTTP 403"))
+            ).lower(),
+        )
+        self.assertIn(
+            "limiter",
+            "\n".join(CC.how_to_fix(self._r("searx", CC.UNCHECKED, "HTTP 429"))),
+        )
+        self.assertIn(
+            "docker rm -f searxng",
+            "\n".join(
+                CC.how_to_fix(
+                    self._r(
+                        "searx",
+                        CC.UNCHECKED,
+                        "RWLayer of container x is unexpectedly nil",
+                    )
+                )
+            ),
+        )
+        self.assertIn(
+            "--search",
+            "\n".join(
+                CC.how_to_fix(self._r("searx", CC.UNCHECKED, "no results for 'x'"))
+            ),
+        )
+
+    def test_expand_key_and_ollama(self):
+        self.assertIn(
+            "--set-key",
+            "\n".join(
+                CC.how_to_fix(
+                    self._r("expand", CC.UNCHECKED, "No OpenRouter API key found")
+                )
+            ),
+        )
+        self.assertIn(
+            "ai-on",
+            "\n".join(
+                CC.how_to_fix(
+                    self._r("expand", CC.UNCHECKED, "Ollama connection refused")
+                )
+            ),
+        )
+
+    def test_every_step_has_a_fallback_or_specific_hint(self):
+        for key in CC.STEP_KEYS:
+            if key == "searx" or key in CC._FIXES:
+                self.assertTrue(CC._FIXES[key], key)
+        self.assertTrue(
+            CC.how_to_fix(self._r("links", CC.UNCHECKED, "could not be checked"))
+        )
+
+    def test_summary_prints_the_hints(self):
+        lines = []
+
+        class Capture:  # collects everything print_summary prints (stub-independent)
+            def rule(self, *args, **kwargs):
+                pass
+
+            def print(self, *args, **kwargs):
+                lines.extend(str(a) for a in args)
+
+        results = [self._r("searx", CC.UNCHECKED, "SearXNG is not running")]
+        with mock.patch.object(CC, "console", Capture()):
+            code = CC.print_summary(results)
+        text = "\n".join(lines)
+        self.assertEqual(code, 1)
+        self.assertIn("How to fix [searx]", text)
+        self.assertIn("searx.sh start", text)
