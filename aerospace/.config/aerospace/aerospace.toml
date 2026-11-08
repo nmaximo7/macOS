@@ -42,10 +42,9 @@ after-startup-command = [
 # -----------------------------------------------------------------------------
 # Keep these workspaces alive even when empty, so they always exist and the
 # keyboard shortcuts work immediately.
-#   T = Terminal (Ghostty)     O = Obsidian     Z = Zen/S = Safari
-#   C = Code (VS Code)         D = Deskflow     F = Finder
-#   V = OpenClaw (Vibe Coding)
-persistent-workspaces = ["T", "O", "W", "C", "D", "F", "S", "Z", "V"]
+#   T = Terminal (Ghostty)     O = Obsidian     Z = Zen          S = Safari
+#   C = Code (VS Code)          D = Deskflow     F = Finder       V = OpenClaw (vibe coding)
+persistent-workspaces = ["T", "O", "C", "D", "F", "S", "Z", "V"]
 
 
 # -----------------------------------------------------------------------------
@@ -79,7 +78,7 @@ focus-follows-mouse.enabled = false
 # When the focused monitor changes, move the mouse pointer to its center.
 on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
 
-# Disable macOS "Hide app" (Cmd+H): hidden apps are brought back automatically,
+# Neutralise macOS "Hide app" (Cmd+H): a hidden app is brought back automatically,
 # because hiding confuses a tiling manager.
 automatically-unhide-macos-hidden-apps = true
 

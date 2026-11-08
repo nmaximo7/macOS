@@ -54,7 +54,7 @@ set -o pipefail
 set -u
 umask 077
 
-VERSION="1.0.3"
+VERSION="1.1.0"
 SCRIPT_NAME="maintain-mac"
 
 # ----------------------------------------------------------------------------
@@ -90,6 +90,7 @@ fi
 : "${QUARANTINE_DAYS:=30}"       # quarantine batches older than this are deleted
 : "${LOG_DAYS:=30}"              # user logs in ~/Library/Logs older than this are deleted
 : "${LOG_KEEP_DAYS:=90}"         # this script's own logs are kept this long
+: "${QUIT_BROWSERS:=}"           # comma list of browsers to QUIT before clearing their cache, e.g. "Safari"
 : "${CLEAN_XCODE:=0}"            # 1 = also clear Xcode DerivedData (regenerable)
 : "${TRASH_ENABLED:=1}"
 
@@ -779,6 +780,27 @@ is_safe_junk_path() {
   return 1
 }
 
+# QUIT_BROWSERS="Safari,Google Chrome": browsers this script may quit (politely, like Cmd+Q) so that
+# their cache can be cleared. Off by default: quitting closes the windows (Safari and Chrome
+# normally reopen them on the next launch).
+browser_listed_for_quit() {
+  local list
+  list=",$(printf '%s' "$QUIT_BROWSERS" | sed 's/ *, */,/g'),"
+  case "$list" in *",$1,"*) return 0 ;; *) return 1 ;; esac
+}
+
+# quit_browser NAME PROCESS: osascript quit, then wait up to 15 s.
+quit_browser() {
+  local name="$1" proc="$2" i=0
+  act "quit $name (osascript)" osascript -e "quit app \"$name\"" || return 1
+  [ "$DRY_RUN" = 1 ] && return 0
+  while [ "$i" -lt 15 ]; do
+    app_running "$proc" || return 0
+    sleep 1; i=$((i + 1))
+  done
+  return 1
+}
+
 clear_dir_contents() {
   find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null
 }
@@ -801,7 +823,11 @@ step_junk() {
     name="${names[$i]}"; proc="${procs[$i]}"; path="${paths[$i]}"; i=$((i + 1))
     [ -d "$path" ] || continue
     if app_running "$proc"; then
-      warn "$name is running: cache skipped (quit it to clean it)"; rc=3; continue
+      if browser_listed_for_quit "$name"; then
+        quit_browser "$name" "$proc" || { warn "$name did not quit (a dialog may be waiting): cache skipped"; rc=3; continue; }
+      else
+        warn "$name is running: cache skipped (quit it, or set QUIT_BROWSERS=\"$name\" in maintain-mac.conf to let this script do it)"; rc=3; continue
+      fi
     fi
     if ! is_safe_junk_path "$path"; then warn "refused unsafe path: $path"; rc=3; continue; fi
     before=$(dir_kb "$path")
@@ -1168,6 +1194,94 @@ print_summary() {
   SUMMARY_WARNS=$warns
 }
 
+# ----------------------------------------------------------------------------
+# "What to do next": for every step that ended with warnings or a failure, print the
+# commands that usually fix it. Kept in one place so it is easy to extend.
+# ----------------------------------------------------------------------------
+hints_for() {   # $1 = step id
+  case "$1" in
+    check) cat <<'H'
+  - Low memory: quit heavy apps. Local AI:  ai-off      SearXNG/Docker:  bash ~/macOS/scripts/searx.sh stop --quit-docker
+  - Disk almost full: du -h -d 1 ~ | sort -hr | head   (alias du1)      Then empty the Trash and run: maintain-mac.sh --run --only downloads,junk
+  - A drive is missing: ls /Volumes      diskutil list      (replug it, then run again)
+H
+    ;;
+    tm) cat <<'H'
+  - Is a destination set?   tmutil destinationinfo
+  - Last backups:           tmutil listbackups | tail -3
+  - Drive mounted?          ls /Volumes      (MacDatosMaster must be there)
+  - Settings > General > Time Machine shows the error, if any. Start by hand: sudo tmutil startbackup --auto
+H
+    ;;
+    backup) cat <<'H'
+  - "STOPPED by the safety limit": check the source, then once:  bash ~/macOS/scripts/maintain-mac.sh --run --only backup --allow-big-delete
+  - Drive not answering (ls or du hangs): unplug it, other port/cable (no hub), then  diskutil verifyVolume /Volumes/DatosSlave
+  - File system of the backup drive (APFS or Mac OS Extended is best):  diskutil info /Volumes/DatosSlave | grep -E "File System|Type"
+  - Start the backup drive clean (history and copies):  rm -rf /Volumes/DatosSlave/_history
+  - Not enough space: see how much each folder uses:   du -sh /Volumes/DatosSlave/*
+H
+    ;;
+    trash) cat <<'H'
+  - Let your terminal control Finder: System Settings > Privacy & Security > Automation > Ghostty (or Terminal) > Finder.
+  - Or empty it by hand:  rm -rf ~/.Trash/*
+H
+    ;;
+    junk) cat <<'H'
+  - A browser was running: quit it, or let the script do it: in maintain-mac.conf set  QUIT_BROWSERS="Safari"   (comma list)
+  - "Full Disk Access": System Settings > Privacy & Security > Full Disk Access > add Ghostty (or Terminal), then restart it.
+H
+    ;;
+    brew) cat <<'H'
+  - Read the warnings:               brew doctor
+  - "formulae are deprecated":       brew uses --installed NAME     (who needs it), then  brew uninstall NAME  or find the replacement
+  - An upgrade failed:               brew upgrade --verbose     then   brew update-reset
+  - Missing dependencies:            brew missing      then   brew install NAME
+  - Installed but not in Brewfile:   brewdump   (alias: saves everything into ~/macOS/Brewfile)
+  - Network trouble (update failed): try again later, or  brew update --force
+H
+    ;;
+    pip) cat <<'H'
+  - Tests failed with the new versions (nothing was changed, it rolled back):
+        cd ~/macOS/myPython && source .venv/bin/activate && python -m pytest -x
+    If a test is out of date, copy the current tests/ from the newest toolkit zip; if a package broke it, pin it in requirements.in (e.g. pandas<3.1).
+  - Broken virtualenv:  cd ~/macOS/myPython && rm -rf .venv && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt pytest
+  - Conflicts:  .venv/bin/pip check
+H
+    ;;
+    git) cat <<'H'
+  - See the state:        cd ~/macOS && git status
+  - Pull conflict:        git status   (fix the files marked "both modified"), then  git rebase --continue    or give up:  git rebase --abort
+  - Secrets blocked:      git rm --cached FILE ; echo FILE >> .gitignore    (never commit .env or keys)
+  - Folder with its own .git ("does not have a commit checked out"): add it to .gitignore, or make it a submodule
+  - Push rejected:        git pull --rebase && git push
+  - Cannot log in:        ssh -T git@github.com     (SSH key)   or   gh auth status
+H
+    ;;
+    updates) cat <<'H'
+  - macOS updates:   System Settings > General > Software Update       or      sudo softwareupdate --install --all --restart
+  - Only Xcode tools (no restart):   softwareupdate --list    then   sudo softwareupdate --install "<label shown above>"
+  - App Store apps:  open the App Store > Updates       or      brew install mas ; mas outdated ; mas upgrade
+  - Let the script do it next time: in maintain-mac.conf set INSTALL_OS_UPDATES=1 and MAS_UPGRADE=1
+H
+    ;;
+  esac
+}
+
+print_hints() {
+  local i=0 st shown=0
+  while [ "$i" -lt "${#RESULT_IDS[@]}" ]; do
+    st="${RESULT_STATUS[$i]}"
+    if [ "$st" = 1 ] || [ "$st" = 3 ] || [ "$st" -gt 3 ] 2>/dev/null; then
+      if [ "$shown" = 0 ]; then printf '\n%s============= WHAT TO DO NEXT =============%s\n' "$C_BOLD" "$C_RESET"; shown=1; fi
+      printf '%s[%s]%s %s\n' "$C_BOLD" "${RESULT_IDS[$i]}" "$C_RESET" "$(status_name "$st")"
+      hints_for "${RESULT_IDS[$i]}"
+    fi
+    i=$((i + 1))
+  done
+  [ "$shown" = 1 ] && printf '  (details of each message are in the log: %s)\n' "$LOG"
+  return 0
+}
+
 notify() {
   [ "$DRY_RUN" = 0 ] && is_mac && have osascript || return 0
   osascript -e "display notification \"$1\" with title \"maintain-mac\"" >/dev/null 2>&1 || true
@@ -1217,6 +1331,7 @@ main() {
   START_FREE_KB=$(free_kb "$HOME"); START_FREE_KB=${START_FREE_KB:-0}
   run_steps
   print_summary
+  print_hints
   notify "Finished: ${SUMMARY_FAILS} failed, ${SUMMARY_WARNS} with warnings"
   [ "$SUMMARY_FAILS" -gt 0 ] && exit 1
   exit 0

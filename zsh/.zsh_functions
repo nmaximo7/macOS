@@ -4,6 +4,11 @@
 # anywhere ("$1", "$@"), use variables and make decisions.
 # =============================================================================
 
+# HUGO_CONTENT: the Markdown files of my website. This is the folder that Syncthing keeps in step
+# with the Arch server where Hugo runs. Every function below (and the Python toolkit's HUGO_ROOT)
+# must point here, so it is defined ONCE. Override it before this file loads if it ever moves.
+export HUGO_CONTENT="${HUGO_CONTENT:-/Volumes/MacDatosMaster/justtothepoint/content}"
+
 # mkcd <dir>: create a folder (and parents) and go into it.
 mkcd() {
     [[ -n $1 ]] || { echo "usage: mkcd <dir>"; return 1; }
@@ -20,12 +25,12 @@ urlencode() {
 }
 
 # myripgrep <pattern>: search inside my Hugo content folder.
-myripgrep() { rg "$@" "$HOME/JustToThePoint/content/" }
+myripgrep() { rg "$@" "$HUGO_CONTENT/" }
 
 # mysearch <pattern>: same search, and open the same words in Google
 # (macOS: `open`, there is no xdg-open).
 mysearch() {
-    rg "$@" "$HOME/JustToThePoint/content/"
+    rg "$@" "$HUGO_CONTENT/"
     open "https://www.google.com/search?q=$(urlencode "$*")"
 }
 
@@ -90,7 +95,7 @@ weather() { curl -s "wttr.in/${1:-}?format=3" }
 # Requires: ripgrep (rg)
 # hugo-image-posts hero.png - Find which Hugo posts reference a given image file.
 hugo-image-posts() {
-  local content="/Volumes/MacDatosMaster/justtothepoint/content"
+  local content="$HUGO_CONTENT"
   local image="${1:t}"  # Use the filename even if you pass a full path
 
   if [[ -z "$1" ]]; then
@@ -106,11 +111,13 @@ hugo-image-posts() {
   rg -F -l --sort path --hidden --no-ignore -g '*.md' -- "$image" "$content"
 }
 
-# 👋 Daily Briefing in my Python project
+# 👋 Daily Briefing in my Python project.
+# Runs in a SUBSHELL ( ... ): the cd and the activated virtualenv disappear when it ends, so
+# your prompt stays where it was. The venv's python is called directly (no `activate` needed).
 greetings() {
-  cd "$HOME/macOS/myPython" || return
-  source .venv/bin/activate || return
-  python3 greetings.py
+  local proj="$HOME/macOS/myPython"
+  [[ -x "$proj/.venv/bin/python" ]] || { print -u2 "greetings: no virtualenv in $proj (see doc/mypython.md, section 5)"; return 1; }
+  ( cd "$proj" && .venv/bin/python greetings.py "$@" )
 }
 
 # 🚀 Start my webserver on a remote server Arch
@@ -118,12 +125,16 @@ start_remote_webserver() {
   ssh -t server -- zsh -lic 'webserver'
 }
 
-# 👩🏻‍💻 proposed front matter, check LaTeX/links/images, quotes, render well?, expand, searx
+# 👩🏻‍💻 content_creation [page.md] [options]: check and improve a Hugo page.
+#   content_creation                      the page you edited LAST in $HUGO_CONTENT
+#   content_creation calculus/x.md        a given page
+#   content_creation --skip searx         without web research      (see: content_creation --help)
+# Same idea as greetings: a subshell, the venv python, and every argument passed on ("$@").
+# Why not `echo ... || return`? echo never fails, so the `||` can never run. A check that CAN
+# fail has to test something (here: that the project and its virtualenv exist).
+# The hints on what to do after an error are printed by the program itself, at the end of its summary.
 content_creation() {
-  echo "Check regularly: python -m pytest. Content ~/hugo-expanded" || return
-  echo "Run bash ~/macOS/scripts/searx.sh removes a leftover container that isn’t running."
-  echo "If it fails, run docker rm -f searxng ; docker container prune -f"
-  cd "$HOME/macOS/myPython" || return
-  source .venv/bin/activate || return
-  python3 content_creation.py
+  local proj="$HOME/macOS/myPython"
+  [[ -x "$proj/.venv/bin/python" ]] || { print -u2 "content_creation: no virtualenv in $proj (see doc/mypython.md, section 5)"; return 1; }
+  ( cd "$proj" && .venv/bin/python content_creation.py "$@" )
 }

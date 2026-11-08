@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 # =============================================================================
 #  help.sh - Personal cheat sheet (memory aid)
-#  Location : /Users/nmaximo7/macOS/help.sh
+#  Location : /Users/nmaximo7/macOS/scripts/help.sh   (alias: myhelp, defined in ~/.zsh_aliases)
 #
 #  Usage:
 #     help.sh            interactive menu
@@ -317,7 +317,7 @@ sec_macos() {
   row "/summarize-pro [text]"	"Summarize text/articles/docs"
   row "🌐 /local-search"	  "Local web search (DuckDuckGo/Bing/Google)"
   row "🌐 /local-search, e.g.,"	 "/local-search popular skills for OpenClaw"
-  row "🙏 /daily-gospel",     "Daily Gospel"
+  row "🙏 /daily-gospel"     "Daily Gospel"
   row "💸 /finance, e.g.,"  "Finance news, /finance compare AAPL,MSFT,GOOGL"
   row "Basic commands:"    "openclaw [setup | doctor | gateway restart | status]"
   row "/model openrouter/openrouter/free" "Switch model, then send your question"
@@ -368,7 +368,11 @@ sec_terminal() {
   row "networksetup -getairportnetwork en0" "Current Wi-Fi network"
   row "ipconfig getifaddr en0" "Your local IP address"
   row "curl ifconfig.me"     "Your public IP address"
-  row "🛠️ maintain-mac.sh --run --yes" "Maintenance script."
+  row "🛠️ maintain-mac.sh --run"   "Weekly maintenance (dry run without --run; --only brew,pip; --list)"
+  row "searx.sh start|stop|status" "My private search engine (SearXNG in Docker)"
+  row "ai-on / ai-off"       "Load / unload the local AI (Ollama + Continue)"
+  row "content_creation"     "Check and improve the Hugo page edited last (--skip searx, --help)"
+  row "greetings"            "Daily briefing (calendar, quote, weather, news, stocks)"
   sub "Git (the daily ones)"
   row "git status / git diff" "What changed?"
   row "git add -p"           "Stage changes chunk by chunk"
@@ -409,13 +413,13 @@ sec_finder() {
 # =============================================================================
 sec_tips() {
   title "0. KEEPING THIS HELP USEFUL"
-  row "Alias it"             "Add to .zshrc:  alias h='~/macOS/help.sh'"
-  row "Quick search"         "h -s clipboard    (finds every mention in every section)"
-  row "Direct section"       "h 5   -> AeroSpace,  h 6 -> aliases"
+  row "Alias"                "myhelp (defined in ~/.zsh_aliases) runs ~/macOS/scripts/help.sh"
+  row "Quick search"         "myhelp -s clipboard    (finds every mention in every section)"
+  row "Direct section"       "myhelp 5   -> AeroSpace,  myhelp 6 -> aliases"
   row "Comment your aliases" "A comment line above each alias/function becomes its description"
   row "Espanso trigger"      "Create :help that runs this script in a terminal"
   row "Raycast script"       "Put a script command in Raycast that opens Terminal with help.sh"
-  row "Print it"             "h all > ~/Desktop/cheatsheet.txt   (colors off when redirected)"
+  row "Print it"             "myhelp all > ~/Desktop/cheatsheet.txt   (colors off when redirected)"
   row "Back it up"           "Keep ~/macOS in git or iCloud so you never lose it"
   note "Edit the static sections whenever you learn a new shortcut."
 }

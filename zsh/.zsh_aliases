@@ -36,7 +36,7 @@ alias ezsh='$EDITOR ~/.zshrc'
 alias ealias='$EDITOR ~/.zsh_aliases'
 alias efunc='$EDITOR ~/.zsh_functions'
 alias reload='exec zsh'                          # a fresh shell: cleaner than `source ~/.zshrc`
-alias myhelp='sh ~/macOS/scripts/help.sh'
+alias myhelp="$DOTFILES/scripts/help.sh"    # my cheat sheet: myhelp, myhelp 5, myhelp -s text
 alias zshbench='time zsh -i -c exit'             # startup time, aim for < 0.3 s
 alias zshprof='ZPROF=1 zsh -i -c exit'           # which part of startup is slow
 
