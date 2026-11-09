@@ -26,8 +26,8 @@ jobs:
       run:
         working-directory: myPython
     steps:
-      - uses: actions/checkout@v4          # download your repo
-      - uses: actions/setup-python@v5      # install Python
+      - uses: actions/checkout@v7          # download your repo
+      - uses: actions/setup-python@v7      # install Python
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
