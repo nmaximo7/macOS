@@ -14,8 +14,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hugo-content-toolkit"
-version = "0.18.0"
-description = "Read-only checks and proposals for Hugo Markdown pages: front matter, LaTeX, links, images, rendering and quotes."
+version = "0.20.1"
+description = "Read-only checks and proposals for Hugo Markdown pages: front matter, LaTeX, links, images, rendering, quotes, web research and an AI rewrite."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -48,12 +48,14 @@ py-modules = [
     "content_links",
     "content_quotes",
     "content_render",
+    "content_searx",
     "content_urls",
     "greetings",
     "link_checker_page",
     "myconfig",
     "mymessages",
     "myollama",
+    "mysearx",
     "openrouter",
     "util",
 ]

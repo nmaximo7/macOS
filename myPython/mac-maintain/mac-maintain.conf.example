@@ -1,0 +1,41 @@
+# mac-maintain.conf  -  optional settings for mac-maintain.sh
+#
+# Copy to  ~/.config/mac-maintain/config  and keep only the lines you want to change.
+# The file is read as shell code, so keep the NAME="value" form and put nothing else in it.
+# Everything here is also accepted as an environment variable, e.g.:
+#     DOWNLOADS_DAYS=60 ./mac-maintain.sh --run --only downloads
+
+# --- Where things are -------------------------------------------------------------------
+DOTFILES_DIR="$HOME/macOS"
+PYTHON_DIR="$DOTFILES_DIR/myPython"
+VENV_DIR="$PYTHON_DIR/.venv"
+SRC_MASTER="/Volumes/MacDatosMaster"
+DST_SLAVE="/Volumes/MacDatosSlave"
+BACKUP_ROOT="$DST_SLAVE/Backups"
+
+# --- Backup -----------------------------------------------------------------------------
+MIRROR_DELETE=1          # 1 = a file deleted on Master is MOVED to Backups/_deleted/<date>/ on Slave
+KEEP_DELETED_DAYS=60     # _deleted folders older than this are offered for removal
+
+# --- Downloads / trash / caches ---------------------------------------------------------
+DOWNLOADS_DIR="$HOME/Downloads"
+DOWNLOADS_DAYS=30            # untouched for this many days -> Trash
+DOWNLOADS_INSTALLER_DAYS=7   # .dmg .pkg .mpkg .iso
+LOGS_DAYS=30                 # ~/Library/Logs files older than this
+BROWSERS="chrome safari firefox brave edge"
+PIP_CACHE_PURGE=0            # 1 = also run `pip cache purge` in the virtual environment
+
+# --- Updates ----------------------------------------------------------------------------
+BREW_GREEDY=0        # 1 = also upgrade casks that update themselves (Chrome, VS Code...)
+BREWFILE_UPDATE=0    # 1 = rewrite ~/macOS/Brewfile from what is installed (comments are lost!)
+MAS_UPGRADE=0        # 1 = upgrade App Store apps with `mas`
+MACOS_INSTALL=0      # 1 = install macOS updates (also --macos-install); always asks
+MACOS_RESTART=0      # 1 = let softwareupdate restart the Mac when needed
+TM_BLOCK=0           # 1 = wait until the Time Machine backup has finished
+
+# --- Git / checks -----------------------------------------------------------------------
+GIT_SCAN=1           # 0 = switch the secrets scan off (do not, the repository is public)
+GIT_MAX_FILE_MB=50
+MIN_FREE_PERCENT=15  # warn when a disk has less free space than this
+SWAP_WARN_MB=4096
+KEEP_LOGS=30         # how many mac-maintain logs to keep

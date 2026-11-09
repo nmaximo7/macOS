@@ -33,6 +33,9 @@ Quick tour
 Public API
 ----------
     search(query, ...)        -> SearxResponse   one HTTP request; raises SearxError
+    gather(queries, ...)      -> SearxResponse   MANY searches (query variants x pages), merged,
+                                                 plus the text of the best pages (deep research)
+    build_queries(title, ...) -> list            several query variants from one page title
     build_query(title, tags)  -> str             a good search query from a page title
     is_up()                   -> bool            does SearXNG answer?
     start() / stop()                             run `searx.sh start|stop`
@@ -52,31 +55,52 @@ environment variable wins over `.env`). All optional:
     SEARX_ENGINES        restrict to engines: "wikipedia,duckduckgo" (empty = all enabled)
     SEARX_TIME_RANGE     day, week, month, year  ("" = any time)
     SEARX_EXCLUDE        domains to drop from the results (your own site!), comma list
+    SEARX_QUERIES        deep research: how many query variants to search       4   (1-8)
+    SEARX_PAGES          deep research: result pages per query                  2   (1-5)
+    SEARX_FETCH          1 = also DOWNLOAD the best pages and keep their text   1
+    SEARX_FETCH_PAGES    how many pages to download                             8   (0-30)
+    SEARX_FETCH_CHARS    text kept from each downloaded page                    4000
+    SEARX_CONTEXT_CHARS  size of the research text handed to the AI model       30000
+    SEARX_DELAY          seconds between two searches (engines block fast ones) 1.0
     SEARX_AUTOSTART      1 = start Docker/SearXNG when it is not running     1
-    SEARX_AUTOSTOP       1 = stop it afterwards, when WE started it          1
-    SEARX_QUIT_DOCKER    1 = also quit Docker Desktop when we launched it    1
+    SEARX_AUTOSTOP       1 = stop it afterwards, only when WE started it     1
+                         always = stop it afterwards EVERY time, even if it was already
+                         running (start it by hand with searx.sh when you want it kept)
+                         0 = never stop it
+    SEARX_RESTART        1 = when SearXNG will not start (or stops answering), force-quit and
+                         relaunch Docker Desktop NO MATTER WHAT it is doing, then try again    1
+    SEARX_QUIT_DOCKER    1 = also quit Docker Desktop, only when WE launched it   1
+                         always = quit Docker Desktop every time (it still stays open
+                         when other containers are running in it); 0 = never quit it
     SEARX_SCRIPT         path of searx.sh (default: ../scripts/searx.sh next to this
                          folder, then ~/macOS/scripts/searx.sh, then next to this file)
 
-Privacy: only your SEARCH QUERY leaves your Mac (SearXNG forwards it to the search engines
-without your IP address or cookies). Nothing else is sent.
+Privacy: the SEARCH QUERIES leave your Mac through SearXNG, which forwards them to the search
+engines without your IP address or cookies. With SEARX_FETCH=1 (the default of deep research)
+this module also DOWNLOADS the best result pages directly from your Mac, so those sites see
+your IP address like any visit from a browser. Set SEARX_FETCH=0 to avoid that: you then get
+titles, snippets and URLs only. Private addresses (localhost, 192.168.x.x...) are never fetched.
 """
 
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import contextlib
 import html
+import ipaddress
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
@@ -95,8 +119,21 @@ TIME_RANGES = ("", "day", "week", "month", "year")
 USER_AGENT = "mysearx/1.0 (+local SearXNG client)"
 ENV_FILE = Path(__file__).resolve().parent / ".env"
 
+DEFAULT_QUERIES, MAX_QUERIES = 4, 8  # deep research: query variants
+DEFAULT_PAGES, MAX_PAGES = 2, 5  # deep research: result pages per query
+DEFAULT_FETCH_PAGES, MAX_FETCH_PAGES = 8, 30  # pages downloaded for their text
+DEFAULT_FETCH_CHARS = 4_000  # text kept per downloaded page
+DEFAULT_CONTEXT_CHARS = 30_000  # research text for the AI model
+DEFAULT_DELAY = 1.0  # seconds between searches
+FETCH_TIMEOUT = 15.0
+MAX_PAGE_BYTES = 1_500_000  # never read more than this from one web page
+FETCH_WORKERS = 4
+BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+QUERY_SUFFIXES = ("tutorial", "examples", "explained", "guide", "how it works", "documentation", "best practices")
+
 START_TIMEOUT = 420  # first start downloads the image and may boot Docker: be patient
 STOP_TIMEOUT = 120
+RESET_TIMEOUT = START_TIMEOUT + 180  # force-quit Docker, launch it again, start SearXNG
 
 
 class SearxError(RuntimeError):
@@ -145,9 +182,7 @@ def _get(name: str, default: str = "", dotenv: "dict | None" = None) -> str:
     """Environment variable first, then the .env file, then `default`."""
     if name in os.environ and os.environ[name].strip():
         return os.environ[name].strip()
-    return (dotenv if dotenv is not None else _dotenv_values()).get(
-        name, ""
-    ).strip() or default
+    return (dotenv if dotenv is not None else _dotenv_values()).get(name, "").strip() or default
 
 
 def _truthy(raw: str, default: bool) -> bool:
@@ -155,6 +190,13 @@ def _truthy(raw: str, default: bool) -> bool:
     if not raw:
         return default
     return raw in ("1", "true", "yes", "on", "y")
+
+
+def _mode(raw: str, default: bool) -> tuple:
+    """(enabled, always) for a setting that accepts 1/0/yes/no/... or the word `always`."""
+    if raw.strip().lower() == "always":
+        return True, True
+    return _truthy(raw, default), False
 
 
 def _number(name: str, raw: str, default, cast):
@@ -197,8 +239,18 @@ class SearxConfig:
     exclude: tuple = ()
     autostart: bool = True
     autostop: bool = True
+    stop_always: bool = False  # SEARX_AUTOSTOP=always: stop it even when it was already running
     quit_docker: bool = True
+    quit_docker_always: bool = False  # SEARX_QUIT_DOCKER=always: quit Docker Desktop every time
+    restart_on_fail: bool = True  # SEARX_RESTART: when SearXNG will not start, force-restart Docker
     script: "Path | None" = None
+    queries: int = DEFAULT_QUERIES  # deep research: query variants
+    pages: int = DEFAULT_PAGES  # deep research: result pages per query
+    fetch: bool = True  # download the best pages and keep their text
+    fetch_pages: int = DEFAULT_FETCH_PAGES
+    fetch_chars: int = DEFAULT_FETCH_CHARS
+    context_chars: int = DEFAULT_CONTEXT_CHARS
+    delay: float = DEFAULT_DELAY
 
     @property
     def port(self) -> int:
@@ -221,16 +273,30 @@ def load_config() -> SearxConfig:
 
     time_range = get("SEARX_TIME_RANGE").lower()
     if time_range not in TIME_RANGES:
-        raise SearxError(
-            f"SEARX_TIME_RANGE must be one of day, week, month, year; got {time_range!r}"
-        )
+        raise SearxError(f"SEARX_TIME_RANGE must be one of day, week, month, year; got {time_range!r}")
     limit = _number("SEARX_RESULTS", get("SEARX_RESULTS"), DEFAULT_LIMIT, int)
     if not 1 <= limit <= MAX_LIMIT:
-        raise SearxError(
-            f"SEARX_RESULTS must be between 1 and {MAX_LIMIT}, got {limit}"
-        )
+        raise SearxError(f"SEARX_RESULTS must be between 1 and {MAX_LIMIT}, got {limit}")
     script = get("SEARX_SCRIPT")
+    autostop, stop_always = _mode(get("SEARX_AUTOSTOP"), True)
+    quit_docker, quit_docker_always = _mode(get("SEARX_QUIT_DOCKER"), True)
+    def bounded(name, default, low, high):
+        value = _number(name, get(name), default, int)
+        if not low <= value <= high:
+            raise SearxError(f"{name} must be between {low} and {high}, got {value}")
+        return value
+
+    delay = _number("SEARX_DELAY", get("SEARX_DELAY"), DEFAULT_DELAY, float)
+    if delay < 0:
+        raise SearxError(f"SEARX_DELAY cannot be negative, got {delay}")
     return SearxConfig(
+        queries=bounded("SEARX_QUERIES", DEFAULT_QUERIES, 1, MAX_QUERIES),
+        pages=bounded("SEARX_PAGES", DEFAULT_PAGES, 1, MAX_PAGES),
+        fetch=_truthy(get("SEARX_FETCH"), True),
+        fetch_pages=bounded("SEARX_FETCH_PAGES", DEFAULT_FETCH_PAGES, 0, MAX_FETCH_PAGES),
+        fetch_chars=bounded("SEARX_FETCH_CHARS", DEFAULT_FETCH_CHARS, 500, 20_000),
+        context_chars=bounded("SEARX_CONTEXT_CHARS", DEFAULT_CONTEXT_CHARS, 2_000, 200_000),
+        delay=delay,
         url=normalize_url(get("SEARX_URL")),
         timeout=_number("SEARX_TIMEOUT", get("SEARX_TIMEOUT"), DEFAULT_TIMEOUT, float),
         limit=limit,
@@ -240,8 +306,11 @@ def load_config() -> SearxConfig:
         time_range=time_range,
         exclude=tuple(d.lower().lstrip(".") for d in _csv(get("SEARX_EXCLUDE"))),
         autostart=_truthy(get("SEARX_AUTOSTART"), True),
-        autostop=_truthy(get("SEARX_AUTOSTOP"), True),
-        quit_docker=_truthy(get("SEARX_QUIT_DOCKER"), True),
+        autostop=autostop,
+        stop_always=stop_always,
+        quit_docker=quit_docker,
+        quit_docker_always=quit_docker_always,
+        restart_on_fail=_truthy(get("SEARX_RESTART"), True),
         script=Path(script).expanduser() if script else None,
     )
 
@@ -312,14 +381,14 @@ class SearxResponse:
     query: str
     results: list = field(default_factory=list)
     suggestions: list = field(default_factory=list)  # "did you mean" queries
-    answers: list = field(
-        default_factory=list
-    )  # direct answers (calculator, definitions...)
+    answers: list = field(default_factory=list)  # direct answers (calculator, definitions...)
     unresponsive: list = field(default_factory=list)  # ["google: timeout", ...]
     seconds: float = 0.0
-    total_found: int = (
-        0  # hits before dropping duplicates / excluded domains / the limit
-    )
+    total_found: int = 0  # hits before dropping duplicates / excluded domains / the limit
+    queries: list = field(default_factory=list)  # every query that was searched (gather())
+    pages: dict = field(default_factory=dict)  # url -> text of the downloaded page (gather())
+    errors: list = field(default_factory=list)  # searches or downloads that failed, as text
+    searches: int = 0  # how many requests were made to SearXNG (gather())
 
 
 def _clean_text(value, limit: int = MAX_SNIPPET_CHARS) -> str:
@@ -333,20 +402,9 @@ def _dedupe_key(url: str) -> str:
     """Two URLs that differ only by tracking noise get the same key."""
     p = urlparse(url)
     query = sorted(
-        (k, v)
-        for k, v in parse_qsl(p.query)
-        if not k.lower().startswith(("utm_", "fbclid", "gclid"))
+        (k, v) for k, v in parse_qsl(p.query) if not k.lower().startswith(("utm_", "fbclid", "gclid"))
     )
-    return urlunparse(
-        (
-            "",
-            p.netloc.lower().removeprefix("www."),
-            p.path.rstrip("/"),
-            "",
-            urlencode(query),
-            "",
-        )
-    )
+    return urlunparse(("", p.netloc.lower().removeprefix("www."), p.path.rstrip("/"), "", urlencode(query), ""))
 
 
 def _excluded(url: str, exclude: tuple) -> bool:
@@ -369,11 +427,7 @@ def parse_results(data, limit: int, exclude: tuple = ()):
             continue
         url = str(item.get("url") or "").strip()
         title = _clean_text(item.get("title"), 200)
-        if (
-            not title
-            or urlparse(url).scheme not in ("http", "https")
-            or not urlparse(url).netloc
-        ):
+        if not title or urlparse(url).scheme not in ("http", "https") or not urlparse(url).netloc:
             continue
         if _excluded(url, exclude):
             continue
@@ -417,6 +471,7 @@ def search(
     engines: "str | None" = None,
     time_range: "str | None" = None,
     exclude: "tuple | None" = None,
+    pageno: int = 1,
     config: "SearxConfig | None" = None,
 ) -> SearxResponse:
     """Ask SearXNG and return the cleaned results. Any argument left out comes from the settings.
@@ -435,7 +490,11 @@ def search(
         raise ValueError("time_range must be '', day, week, month or year")
     exclude = cfg.exclude if exclude is None else tuple(d.lower() for d in exclude)
 
+    if not isinstance(pageno, int) or not 1 <= pageno <= 20:
+        raise ValueError("pageno must be an integer between 1 and 20")
     params = {"q": query.strip()[:MAX_QUERY_CHARS], "format": "json"}
+    if pageno > 1:
+        params["pageno"] = str(pageno)
     for name, value in (
         ("language", cfg.language if language is None else language),
         ("categories", cfg.categories if categories is None else categories),
@@ -458,9 +517,7 @@ def search(
     except URLError as exc:
         reason = exc.reason
         if isinstance(reason, TimeoutError) or "timed out" in str(reason):
-            raise SearxError(
-                f"SearXNG at {cfg.url} did not answer within {cfg.timeout:.0f}s"
-            ) from None
+            raise SearxError(f"SearXNG at {cfg.url} did not answer within {cfg.timeout:.0f}s") from None
         raise SearxNotRunning(
             f"nothing answers at {cfg.url} ({reason}). Start it with:  searx.sh start"
             "  (or python3 mysearx.py --start)"
@@ -469,9 +526,7 @@ def search(
         raise SearxError(f"SearXNG at {cfg.url}: {exc}") from None
 
     if len(raw) > MAX_RESPONSE_BYTES:
-        raise SearxError(
-            "SearXNG answered with more data than expected; refusing to read it"
-        )
+        raise SearxError("SearXNG answered with more data than expected; refusing to read it")
     try:
         data = json.loads(raw.decode("utf-8", errors="replace"))
     except ValueError:
@@ -488,41 +543,326 @@ def search(
         results=results,
         suggestions=[
             _clean_text(s, 120)
-            for s in (
-                data.get("suggestions")
-                if isinstance(data.get("suggestions"), list)
-                else []
-            )
+            for s in (data.get("suggestions") if isinstance(data.get("suggestions"), list) else [])
             if isinstance(s, str)
         ][:5],
         answers=[
             text
             for text in (
-                _clean_text(
-                    a
-                    if isinstance(a, str)
-                    else a.get("answer", "")
-                    if isinstance(a, dict)
-                    else "",
-                    300,
-                )
-                for a in (
-                    data.get("answers") if isinstance(data.get("answers"), list) else []
-                )
+                _clean_text(a if isinstance(a, str) else a.get("answer", "") if isinstance(a, dict) else "", 300)
+                for a in (data.get("answers") if isinstance(data.get("answers"), list) else [])
             )
             if text
         ][:3],
         unresponsive=[
             ": ".join(str(x) for x in pair)
-            for pair in (
-                data.get("unresponsive_engines")
-                if isinstance(data.get("unresponsive_engines"), list)
-                else []
-            )
+            for pair in (data.get("unresponsive_engines") if isinstance(data.get("unresponsive_engines"), list) else [])
             if isinstance(pair, (list, tuple))
         ],
         seconds=time.monotonic() - started,
         total_found=total,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 3b. Deep research: many queries, many pages, merged, plus the text of the pages #
+# --------------------------------------------------------------------------- #
+
+
+def build_queries(title: str, tags=(), description: str = "", max_queries: int = DEFAULT_QUERIES, max_words: int = 12) -> list:
+    """Several different searches about the same page, best first (no duplicates).
+
+    One query finds one slice of the web; variants find the others. In this order:
+    the plain title query, "... tutorial", the description's own words, "... examples",
+    the title with the page's tags, then "... explained", "... guide" and so on.
+    Returns [] when there is nothing to search for.
+    """
+    base = build_query(title, tags, description, max_words)
+    if not base:
+        return []
+    words = base.split()
+    lowered = {w.lower() for w in words}
+
+    def with_suffix(suffix: str) -> str:
+        extra = suffix.split()
+        if extra[0].lower() in lowered:
+            return ""
+        return " ".join(words[: max(1, max_words - len(extra))] + extra)
+
+    candidates = [base, with_suffix(QUERY_SUFFIXES[0])]
+    if description.strip():
+        candidates.append(build_query("", (), description, max_words=10))
+    candidates.append(with_suffix(QUERY_SUFFIXES[1]))
+    clean_tags = [" ".join(_MARKUP.sub(" ", str(t)).split()) for t in (tags or ())]
+    clean_tags = [t for t in clean_tags if t and t.lower() not in lowered][:2]
+    if clean_tags:
+        candidates.append(" ".join(words[:5] + clean_tags)[:MAX_QUERY_CHARS])
+    candidates.extend(with_suffix(sfx) for sfx in QUERY_SUFFIXES[2:])
+    out, seen = [], set()
+    for query in candidates:
+        query = query.strip()
+        if query and query.lower() not in seen:
+            seen.add(query.lower())
+            out.append(query)
+    return out[: max(1, max_queries)]
+
+
+def _sleep(seconds: float) -> None:
+    """time.sleep in a function of its own so tests can replace it."""
+    if seconds > 0:
+        time.sleep(seconds)
+
+
+class _TextExtractor(HTMLParser):
+    """The readable text of a web page: headings, paragraphs, list items, code. No menus or scripts."""
+
+    SKIP = {"script", "style", "noscript", "svg", "nav", "header", "footer", "aside", "form", "iframe",
+            "template", "button", "select", "head"}
+    BLOCK = {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "tr", "td", "th", "blockquote",
+             "br", "section", "article", "dd", "dt", "table", "ul", "ol", "main"}
+    HEADING = {"h1", "h2", "h3", "h4"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: list = []
+        self._skip = 0
+        self._heading = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.SKIP:
+            self._skip += 1
+        elif tag in self.BLOCK:
+            self.parts.append("\n")
+            if tag in self.HEADING:
+                self._heading = True
+                self.parts.append("## ")
+
+    def handle_endtag(self, tag):
+        if tag in self.SKIP and self._skip:
+            self._skip -= 1
+        elif tag in self.BLOCK:
+            self._heading = False
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self._skip:
+            self.parts.append(data)
+
+    def text(self) -> str:
+        lines, seen = [], set()
+        for raw in "".join(self.parts).split("\n"):
+            line = " ".join(raw.split())
+            if not line:
+                continue
+            if not line.startswith("## ") and len(line) < 40:  # menu items, buttons, dates...
+                continue
+            if line in seen:
+                continue
+            seen.add(line)
+            lines.append(line)
+        return "\n".join(lines)
+
+
+def _public_host(host: str) -> bool:
+    """True when every address of `host` is a public internet address (never localhost, a LAN
+    device, a link-local or a private range): downloading from this Mac must not reach them."""
+    if not host:
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    addresses = {info[4][0].split("%")[0] for info in infos}
+    try:
+        return bool(addresses) and all(ipaddress.ip_address(a).is_global for a in addresses)
+    except ValueError:
+        return False
+
+
+def _cut_lines(text: str, limit: int) -> str:
+    """Cut at a line boundary (a line itself is cut only when it is the first one)."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    newline = cut.rfind("\n")
+    return (cut[:newline] if newline > limit // 3 else cut).rstrip()
+
+
+def fetch_page_text(url: str, max_chars: int = DEFAULT_FETCH_CHARS, timeout: float = FETCH_TIMEOUT) -> str:
+    """Download ONE web page and return its readable text (at most `max_chars`).
+
+    Safety: only http(s); never a private/local address (checked again after redirects); at most
+    MAX_PAGE_BYTES are read; only text/html pages. Raises SearxError with a short reason.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise SearxError("not an http(s) link")
+    if not _public_host(parsed.hostname):
+        raise SearxError("not a public address")
+    request = Request(url, headers={"User-Agent": BROWSER_UA, "Accept": "text/html,application/xhtml+xml,text/plain;q=0.8"})
+    try:
+        with urlopen(request, timeout=timeout) as reply:
+            final = urlparse(reply.geturl())
+            if final.hostname != parsed.hostname and not _public_host(final.hostname or ""):
+                raise SearxError("redirected to a non-public address")
+            kind = reply.headers.get_content_type()
+            if kind not in ("text/html", "application/xhtml+xml", "text/plain"):
+                raise SearxError(f"not a web page ({kind})")
+            raw = reply.read(MAX_PAGE_BYTES)
+            charset = reply.headers.get_content_charset() or "utf-8"
+    except HTTPError as exc:
+        raise SearxError(f"HTTP {exc.code}") from None
+    except URLError as exc:
+        raise SearxError(str(exc.reason)[:80]) from None
+    except (TimeoutError, OSError, ValueError) as exc:
+        raise SearxError(f"{type(exc).__name__}: {exc}"[:80]) from None
+    try:
+        page = raw.decode(charset, errors="replace")
+    except LookupError:
+        page = raw.decode("utf-8", errors="replace")
+    if kind == "text/plain":
+        text = "\n".join(" ".join(line.split()) for line in page.splitlines() if line.strip())
+    else:
+        extractor = _TextExtractor()
+        try:
+            extractor.feed(page)
+            extractor.close()
+        except Exception:  # broken HTML must never stop the research  # noqa: BLE001
+            pass
+        text = extractor.text()
+    if len(text) < 200:
+        raise SearxError("no readable text")
+    return _cut_lines(text, max_chars)
+
+
+def gather(
+    queries,
+    *,
+    limit: "int | None" = None,
+    pages: "int | None" = None,
+    fetch: "bool | None" = None,
+    fetch_pages: "int | None" = None,
+    language: "str | None" = None,
+    categories: "str | None" = None,
+    engines: "str | None" = None,
+    time_range: "str | None" = None,
+    config: "SearxConfig | None" = None,
+    progress=None,
+) -> SearxResponse:
+    """Deep research: search EVERY query (and `pages` result pages of each), merge the answers into
+    one ranked list, and download the text of the best pages.
+
+    queries:     a string or a list of strings (see build_queries()).
+    limit:       results kept per search page; None = SEARX_RESULTS.
+    pages:       result pages per query; None = SEARX_PAGES.
+    fetch:       download the best pages' text; None = SEARX_FETCH.
+    fetch_pages: how many pages to download; None = SEARX_FETCH_PAGES.
+    progress:    optional function(text) called with a short message at every step.
+
+    Ranking: a link found by several queries (and high in each) comes first (reciprocal rank
+    fusion). One failing search does not stop the others; SearxNotRunning (nothing answers)
+    does. Raises SearxError only when no search worked at all.
+    """
+    cfg = config or load_config()
+    if isinstance(queries, str):
+        queries = [queries]
+    wanted, seen = [], set()
+    for q in queries or ():
+        q = (q or "").strip()
+        if q and q.lower() not in seen:
+            seen.add(q.lower())
+            wanted.append(q)
+    wanted = wanted[:MAX_QUERIES]
+    if not wanted:
+        raise ValueError("queries must contain at least one non-empty query")
+    pages = cfg.pages if pages is None else pages
+    if not isinstance(pages, int) or not 1 <= pages <= MAX_PAGES:
+        raise ValueError(f"pages must be an integer between 1 and {MAX_PAGES}")
+    per_page = cfg.limit if limit is None else limit
+    say = progress or (lambda text: None)
+
+    started = time.monotonic()
+    merged: dict = {}  # dedupe key -> [SearxResult, score]
+    answers, suggestions, unresponsive, errors, searched = [], [], [], [], []
+    total = requests_made = successes = 0
+    last_error = None
+    for qi, query in enumerate(wanted):
+        position = 0
+        for page_number in range(1, pages + 1):
+            if requests_made:
+                _sleep(cfg.delay)
+            requests_made += 1
+            say(f"searching ({qi + 1}/{len(wanted)}, page {page_number}): {query}")
+            try:
+                response = search(
+                    query, limit=per_page, language=language, categories=categories, engines=engines,
+                    time_range=time_range, pageno=page_number, config=cfg,
+                )
+            except SearxNotRunning:
+                raise
+            except SearxError as exc:
+                last_error = exc
+                errors.append(f"search {query!r} page {page_number}: {str(exc).splitlines()[0]}")
+                break  # the next page of a failing query would fail too
+            successes += 1
+            if query not in searched:
+                searched.append(query)
+            total += response.total_found
+            for note in response.unresponsive:
+                if note not in unresponsive:
+                    unresponsive.append(note)
+            for text in response.answers:
+                if text not in answers:
+                    answers.append(text)
+            for text in response.suggestions:
+                if text not in suggestions:
+                    suggestions.append(text)
+            if not response.results:
+                break  # no more pages for this query
+            for result in response.results:
+                key = _dedupe_key(result.url)
+                gain = 1.0 / (10 + position)
+                position += 1
+                if key in merged:
+                    merged[key][1] += gain
+                else:
+                    merged[key] = [result, gain]
+    if not successes:
+        raise last_error or SearxError("no search could be made")
+
+    ranked = [item[0] for item in sorted(merged.values(), key=lambda item: -item[1])]
+    texts: dict = {}
+    wanted_fetch = cfg.fetch if fetch is None else fetch
+    count = cfg.fetch_pages if fetch_pages is None else fetch_pages
+    if wanted_fetch and count > 0 and ranked:
+        targets = [r for r in ranked if not urlparse(r.url).path.lower().endswith((".pdf", ".zip", ".mp4", ".png", ".jpg", ".gif"))][:count]
+        say(f"downloading the text of {len(targets)} page(s)")
+
+        def one(result):
+            try:
+                return result.url, fetch_page_text(result.url, cfg.fetch_chars), ""
+            except SearxError as exc:
+                return result.url, "", str(exc)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+            for url, text, reason in pool.map(one, targets):
+                if text:
+                    texts[url] = text
+                else:
+                    host = (urlparse(url).hostname or url).removeprefix("www.")
+                    errors.append(f"download {host}: {reason}")
+    return SearxResponse(
+        query=" | ".join(searched or wanted),
+        results=ranked,
+        suggestions=suggestions[:10],
+        answers=answers[:5],
+        unresponsive=unresponsive,
+        seconds=time.monotonic() - started,
+        total_found=total,
+        queries=searched,
+        pages=texts,
+        errors=errors,
+        searches=requests_made,
     )
 
 
@@ -538,32 +878,46 @@ def format_results(response: SearxResponse, markdown: bool = False) -> str:
     lines = []
     for number, r in enumerate(response.results, 1):
         if markdown:
-            lines.append(
-                f"{number}. [{r.title}]({r.url})"
-                + (f" - {r.snippet}" if r.snippet else "")
-            )
+            lines.append(f"{number}. [{r.title}]({r.url})" + (f" - {r.snippet}" if r.snippet else ""))
         else:
-            lines.append(
-                f"{number}. {r.title}\n   {r.url}"
-                + (f"\n   {r.snippet}" if r.snippet else "")
-            )
+            lines.append(f"{number}. {r.title}\n   {r.url}" + (f"\n   {r.snippet}" if r.snippet else ""))
     return "\n".join(lines)
 
 
 def as_context(response: SearxResponse, max_chars: int = 6000) -> str:
-    """A compact text block for an AI prompt: numbered title, domain, date, snippet and URL.
+    """A text block for an AI prompt.
 
-    Cut at `max_chars` on a whole-result boundary so a prompt never ends in half a sentence.
-    Returns '' when there are no results.
+    Without downloaded pages: numbered title, domain, date, snippet and URL, cut at `max_chars` on a
+    whole-result boundary. With pages (deep research, `response.pages`): the same list takes at
+    most 40% of `max_chars`, followed by "PAGE EXCERPTS": the readable text of the best pages,
+    as many as fit. Returns '' when there are no results.
     """
+    has_pages = bool(response.pages)
+    list_budget = int(max_chars * 0.4) if has_pages else max_chars
     blocks = []
     for number, r in enumerate(response.results, 1):
         head = f"[{number}] {r.title} ({r.domain}{', ' + r.published if r.published else ''})"
         block = head + (f"\n    {r.snippet}" if r.snippet else "") + f"\n    {r.url}"
-        if sum(len(b) + 1 for b in blocks) + len(block) > max_chars:
+        if sum(len(b) + 1 for b in blocks) + len(block) > list_budget:
             break
         blocks.append(block)
-    return "\n".join(blocks)
+    text = "\n".join(blocks)
+    if not has_pages or not text:
+        return text
+    parts = [text, "", "PAGE EXCERPTS (text of the pages above; [n] is the number of the result):"]
+    used = len(text) + sum(len(p) + 1 for p in parts[1:])
+    for number, r in enumerate(response.results, 1):
+        body = response.pages.get(r.url)
+        if not body:
+            continue
+        head = f"--- [{number}] {r.title} ({r.domain}) ---"
+        room = max_chars - used - len(head) - 2
+        if room < 400:  # not worth a stub
+            break
+        excerpt = _cut_lines(body, room)
+        parts.extend([head, excerpt])
+        used += len(head) + len(excerpt) + 2
+    return "\n".join(parts)
 
 
 # --------------------------------------------------------------------------- #
@@ -576,10 +930,7 @@ def is_up(config: "SearxConfig | None" = None, timeout: float = 3.0) -> bool:
     cfg = config or load_config()
     for path in ("/healthz", "/"):
         try:
-            with urlopen(
-                Request(cfg.url + path, headers={"User-Agent": USER_AGENT}),
-                timeout=timeout,
-            ) as reply:
+            with urlopen(Request(cfg.url + path, headers={"User-Agent": USER_AGENT}), timeout=timeout) as reply:
                 if 200 <= reply.status < 300:
                     return True
         except (OSError, ValueError):
@@ -592,11 +943,7 @@ def find_script(config: "SearxConfig | None" = None) -> "Path | None":
     cfg = config or load_config()
     here = Path(__file__).resolve().parent
     candidates = [cfg.script] if cfg.script else []
-    candidates += [
-        here.parent / "scripts" / "searx.sh",
-        Path.home() / "macOS" / "scripts" / "searx.sh",
-        here / "searx.sh",
-    ]
+    candidates += [here.parent / "scripts" / "searx.sh", Path.home() / "macOS" / "scripts" / "searx.sh", here / "searx.sh"]
     for candidate in candidates:
         if candidate and candidate.is_file():
             return candidate
@@ -623,17 +970,13 @@ def _run_script(args: list, config: SearxConfig, timeout: float) -> str:
             stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
-        raise SearxError(
-            f"searx.sh {' '.join(args)} did not finish within {timeout:.0f}s"
-        ) from None
+        raise SearxError(f"searx.sh {' '.join(args)} did not finish within {timeout:.0f}s") from None
     except OSError as exc:
         raise SearxError(f"cannot run {script}: {exc}") from None
     output = (done.stdout or "") + (done.stderr or "")
     if done.returncode != 0:
         tail = "\n".join(output.strip().splitlines()[-8:])
-        raise SearxError(
-            f"searx.sh {' '.join(args)} failed (exit {done.returncode}):\n{tail}"
-        )
+        raise SearxError(f"searx.sh {' '.join(args)} failed (exit {done.returncode}):\n{tail}")
     return output
 
 
@@ -646,54 +989,70 @@ def start(config: "SearxConfig | None" = None) -> bool:
     if is_up(cfg):
         return False
     if not cfg.is_local:
-        raise SearxNotRunning(
-            f"{cfg.url} is not on this Mac and does not answer: cannot start it from here"
-        )
-    _run_script(["start"], cfg, START_TIMEOUT)
-    if not is_up(cfg, timeout=5):
-        raise SearxError(
-            "searx.sh start finished but SearXNG still does not answer; run:  searx.sh logs"
-        )
+        raise SearxNotRunning(f"{cfg.url} is not on this Mac and does not answer: cannot start it from here")
+    problem = None
+    try:
+        _run_script(["start"], cfg, START_TIMEOUT)
+        if not is_up(cfg, timeout=5):
+            problem = SearxError("searx.sh start finished but SearXNG still does not answer; run:  searx.sh logs")
+    except SearxError as exc:
+        problem = exc
+    if problem is not None:
+        if not cfg.restart_on_fail:
+            raise problem
+        # Personal computer: nothing else needs Docker, so do not be gentle (SEARX_RESTART=0 turns this off).
+        first = str(problem).strip().splitlines()[0] if str(problem).strip() else "no answer"
+        print(f"SearXNG did not start ({first}). Restarting Docker no matter what...", file=sys.stderr)
+        reset(cfg)
     return True
 
 
-def stop(
-    config: "SearxConfig | None" = None, quit_docker: "bool | None" = None
-) -> None:
-    """Stop the SearXNG container (and quit Docker Desktop if searx.sh launched it)."""
+def reset(config: "SearxConfig | None" = None) -> None:
+    """Restart EVERYTHING, no matter what: stop the container, force-quit Docker Desktop (even if it
+    hangs or is busy with something else), launch it again and start SearXNG. Raises SearxError
+    when SearXNG still does not answer afterwards. Only for a SearXNG on this Mac."""
+    cfg = config or load_config()
+    if not cfg.is_local:
+        raise SearxNotRunning(f"{cfg.url} is not on this Mac and does not answer: cannot restart it from here")
+    _run_script(["reset"], cfg, RESET_TIMEOUT)
+    if not is_up(cfg, timeout=5):
+        raise SearxError("SearXNG still does not answer after restarting Docker; run:  searx.sh logs")
+
+
+def stop(config: "SearxConfig | None" = None, quit_docker: "bool | None" = None) -> None:
+    """Stop the SearXNG container, and quit Docker Desktop according to SEARX_QUIT_DOCKER
+    (1 = only if searx.sh launched it, always = every time, 0 = never)."""
     cfg = config or load_config()
     quit_it = cfg.quit_docker if quit_docker is None else quit_docker
-    _run_script(["stop"] + ([] if quit_it else ["--keep-docker"]), cfg, STOP_TIMEOUT)
+    if not quit_it:
+        flag = ["--keep-docker"]  # never quit Docker Desktop
+    elif cfg.quit_docker_always:
+        flag = ["--quit-docker"]  # quit it every time (not when other containers run)
+    else:
+        flag = []  # quit it only if searx.sh launched it
+    _run_script(["stop", *flag], cfg, STOP_TIMEOUT)
 
 
-def ensure_running(
-    config: "SearxConfig | None" = None, autostart: "bool | None" = None
-) -> bool:
+def ensure_running(config: "SearxConfig | None" = None, autostart: "bool | None" = None) -> bool:
     """Make sure SearXNG answers. Returns True when this call had to start it.
 
     Raises SearxNotRunning when it is down and starting is disabled (SEARX_AUTOSTART=0).
     """
     cfg = config or load_config()
     if cfg.autostart if autostart is None else autostart:
-        return start(
-            cfg
-        )  # start() itself checks first and returns False when it already answers
+        return start(cfg)  # start() itself checks first and returns False when it already answers
     if is_up(cfg):
         return False
-    raise SearxNotRunning(
-        f"SearXNG is not running at {cfg.url} and SEARX_AUTOSTART is off. Run:  searx.sh start"
-    )
+    raise SearxNotRunning(f"SearXNG is not running at {cfg.url} and SEARX_AUTOSTART is off. Run:  searx.sh start")
 
 
 @contextlib.contextmanager
-def running(
-    config: "SearxConfig | None" = None,
-    autostart: "bool | None" = None,
-    autostop: "bool | None" = None,
-):
+def running(config: "SearxConfig | None" = None, autostart: "bool | None" = None, autostop: "bool | None" = None):
     """`with running(): ...` - SearXNG is up inside the block and, if the block had to
     start it, it is stopped again afterwards (even when the block raises or you press
-    Ctrl-C). Something that was already running is NEVER stopped by this.
+    Ctrl-C). Something that was already running is left alone, UNLESS you chose
+    SEARX_AUTOSTOP=always (then it is stopped every time, to free your Mac's resources).
+    `autostop=False` (the --keep options) overrides everything and never stops it.
 
     Yields True when this block started it.
     """
@@ -702,7 +1061,8 @@ def running(
     try:
         yield started
     finally:
-        if started and (cfg.autostop if autostop is None else autostop):
+        enabled = cfg.autostop if autostop is None else autostop
+        if enabled and (started or cfg.stop_always):
             try:
                 stop(cfg)
             except SearxError as exc:  # never hide the real error of the block
@@ -727,41 +1087,19 @@ def cli(argv=None) -> int:
         description="Search the web through your own SearXNG (the Docker container managed by searx.sh).",
     )
     parser.add_argument("query", nargs="*", help="what to search for")
-    parser.add_argument(
-        "--limit", type=int, help=f"results to show (1-{MAX_LIMIT}; SEARX_RESULTS)"
-    )
+    parser.add_argument("--limit", type=int, help=f"results to show (1-{MAX_LIMIT}; SEARX_RESULTS)")
     parser.add_argument("--language", help="en, es, all ... (SEARX_LANGUAGE)")
-    parser.add_argument(
-        "--categories", help="general, it, science, news ... (SEARX_CATEGORIES)"
-    )
-    parser.add_argument(
-        "--engines", help="comma list, e.g. wikipedia,duckduckgo (SEARX_ENGINES)"
-    )
-    parser.add_argument(
-        "--time-range",
-        choices=[t for t in TIME_RANGES if t],
-        help="day, week, month or year",
-    )
+    parser.add_argument("--categories", help="general, it, science, news ... (SEARX_CATEGORIES)")
+    parser.add_argument("--engines", help="comma list, e.g. wikipedia,duckduckgo (SEARX_ENGINES)")
+    parser.add_argument("--time-range", choices=[t for t in TIME_RANGES if t], help="day, week, month or year")
     out = parser.add_mutually_exclusive_group()
-    out.add_argument(
-        "--json", action="store_true", help="print JSON (for scripts, Raycast...)"
-    )
+    out.add_argument("--json", action="store_true", help="print JSON (for scripts, Raycast...)")
     out.add_argument("--markdown", action="store_true", help="print a Markdown list")
+    parser.add_argument("--status", action="store_true", help="say whether SearXNG answers, and exit")
+    parser.add_argument("--start", action="store_true", help="start Docker and SearXNG, and exit")
+    parser.add_argument("--stop", action="store_true", help="stop SearXNG (and Docker if we launched it), and exit")
     parser.add_argument(
-        "--status", action="store_true", help="say whether SearXNG answers, and exit"
-    )
-    parser.add_argument(
-        "--start", action="store_true", help="start Docker and SearXNG, and exit"
-    )
-    parser.add_argument(
-        "--stop",
-        action="store_true",
-        help="stop SearXNG (and Docker if we launched it), and exit",
-    )
-    parser.add_argument(
-        "--keep",
-        action="store_true",
-        help="with a query: do not stop SearXNG afterwards even if we started it",
+        "--keep", action="store_true", help="with a query: do not stop SearXNG afterwards even if we started it"
     )
     args = parser.parse_args(argv)
 
@@ -780,10 +1118,7 @@ def cli(argv=None) -> int:
         query = " ".join(args.query).strip()
         if not query:
             parser.print_usage(sys.stderr)
-            print(
-                "error: give a search query (or --status / --start / --stop)",
-                file=sys.stderr,
-            )
+            print("error: give a search query (or --status / --start / --stop)", file=sys.stderr)
             return 2
         with running(cfg, autostop=False if args.keep else None):
             response = search(

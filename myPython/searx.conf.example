@@ -1,0 +1,15 @@
+# searx.conf - optional settings for searx.sh
+# Copy to  ~/macOS/scripts/searx.conf  (next to searx.sh) and keep only the lines you change.
+# Read as shell code: keep the NAME="value" form and nothing else. Environment variables of the
+# same names also work, e.g.   SEARX_PORT=8888 bash scripts/searx.sh start
+# If you change the port here, set the same one in the toolkit's .env:  SEARX_URL=http://127.0.0.1:8888
+# (mysearx.py passes the port of SEARX_URL to the script when it starts it for you).
+
+SEARX_PORT="8080"                          # only this Mac can connect (127.0.0.1)
+SEARX_HOME="$HOME/.local/share/searxng"    # compose file + config/settings.yml live here
+SEARX_IMAGE="searxng/searxng:latest"
+SEARX_MEMORY="1g"                          # memory limit of the container
+SEARX_CPUS="2"
+DOCKER_WAIT="240"                          # seconds to wait for Docker Desktop to start
+SEARX_WAIT="120"                           # seconds to wait for SearXNG to answer
+SEARX_TEST_QUERY="free software"           # used by `searx.sh test` and after every start

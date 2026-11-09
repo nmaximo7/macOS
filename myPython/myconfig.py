@@ -67,6 +67,9 @@ Variables understood in .env  (all optional - see .env.example)
                         MYMODEL_QUERY)                                  (openrouter)
     EXPAND_OUTPUT_DIR   folder where the expanded article is saved, OUTSIDE
                         the Hugo content folder                         (~/hugo-expanded)
+    EXPAND_RETRIES      how many times to ask AGAIN when the hosted model gives
+                        no answer (empty, busy, timeout, 429, 5xx)      (2)
+    EXPAND_RETRY_WAIT   seconds to wait before each new attempt         (300 = 5 minutes)
 
     AUTHOR              value of "author:" proposed by check_hugo_frontmatter
                         ("" = leave each page's own author alone)       (none)
@@ -103,6 +106,8 @@ DEFAULT_QUOTE_SOURCES = ("file", "fortune")  # online sources are opt-in
 DEFAULT_WEATHER_LANG = "en"
 DEFAULT_OPENROUTER_MODEL = "openrouter/free"  # OpenRouter picks a free model for you
 DEFAULT_OPENROUTER_TIMEOUT = 300.0  # seconds; rewriting a long article takes minutes
+DEFAULT_EXPAND_RETRIES = 2  # extra attempts when the hosted (free) model gives no answer
+DEFAULT_EXPAND_RETRY_WAIT = 300.0  # seconds between attempts (5 minutes)
 EXPAND_PROVIDERS = ("openrouter", "ollama")  # who can rewrite an article
 DEFAULT_EXPAND_PROVIDER = "openrouter"
 DEFAULT_STOCK_TICKERS = (  # major US stocks; change them with STOCK_TICKERS in .env
@@ -146,6 +151,8 @@ class Settings:
     openrouter_max_tokens: "int | None" = None  # None = let the model decide
     expand_provider: str = DEFAULT_EXPAND_PROVIDER  # "openrouter" or "ollama"
     expand_output_dir: "Path | None" = None  # None = ~/hugo-expanded
+    expand_retries: int = DEFAULT_EXPAND_RETRIES
+    expand_retry_wait: float = DEFAULT_EXPAND_RETRY_WAIT
 
 
 # --------------------------------------------------------------------------- #
@@ -246,6 +253,8 @@ def load_settings() -> Settings:
         openrouter_max_tokens=_read_number("OPENROUTER_MAX_TOKENS", None, int),
         expand_provider=_read_provider("EXPAND_PROVIDER", DEFAULT_EXPAND_PROVIDER),
         expand_output_dir=_read_path("EXPAND_OUTPUT_DIR"),
+        expand_retries=max(0, _read_number("EXPAND_RETRIES", DEFAULT_EXPAND_RETRIES, int)),
+        expand_retry_wait=max(0.0, _read_number("EXPAND_RETRY_WAIT", DEFAULT_EXPAND_RETRY_WAIT, float)),
     )
 
 

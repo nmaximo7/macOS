@@ -322,6 +322,7 @@ sec_macos() {
   row "Basic commands:"    "openclaw [setup | doctor | gateway restart | status]"
   row "/model openrouter/openrouter/free" "Switch model, then send your question"
   row "/model list"       "See available models"
+  row "/site_health_check" "Check site health"
 }
 
 # =============================================================================

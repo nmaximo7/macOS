@@ -59,7 +59,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.text import Text
 
 from content_urls import front_len, read_lines
-from myconfig import EXPAND_PROVIDERS, get_settings
+from myconfig import DEFAULT_EXPAND_RETRIES, DEFAULT_EXPAND_RETRY_WAIT, EXPAND_PROVIDERS, get_settings
 
 console = Console(highlight=False)
 
@@ -68,6 +68,8 @@ console = Console(highlight=False)
 # --------------------------------------------------------------------------- #
 
 PROMPT_NAME = "expand_article"  # the system prompt in mymessages.py
+PROMPT_RESEARCH = "expand_article_research"  # same, for an article + web search results
+MAX_RESEARCH_CHARS = 60_000  # hard cap; the real size is SEARX_CONTEXT_CHARS (default 30000)
 MAX_BODY_CHARS = 100_000  # same limit as myollama.py / openrouter.py
 MIN_BODY_CHARS = 20  # a body shorter than this is not an article
 MIN_GROWTH = 1.15  # "expanded" means at least 15% more words than the original
@@ -99,6 +101,8 @@ class Expansion:
     saved_to: "Path | None" = None
     copied: bool = False
     warnings: list = field(default_factory=list)  # things to review before pasting
+    cautions: list = field(default_factory=list)  # worth a look, but not a problem (little growth...)
+    attempts: int = 1  # how many times the model was asked (more than 1 after an empty answer)
     notes: list = field(default_factory=list)  # harmless facts ("removed a code fence")
 
     @property
@@ -218,10 +222,22 @@ def _placeholders(text: str) -> list:
     return [m.group(0).strip() for m in _PLACEHOLDER.finditer(text)]
 
 
-def compare_texts(original: str, expanded: str):
+def growth_caution(before: int, after: int) -> str:
+    """"" when the rewrite grew enough; otherwise a short sentence (a CAUTION, not a problem)."""
+    if before and before <= after < before * MIN_GROWTH:
+        return (
+            f"only {100 * (after - before) // before}% longer than the original ({before} -> {after} words); "
+            "free models often do this: run it again or try another model if you want more"
+        )
+    return ""
+
+
+def compare_texts(original: str, expanded: str, known_urls=()):
     """Check an expansion against the original. Returns (warnings, notes).
 
     warnings are things to read BEFORE pasting; notes are only information.
+    known_urls: URLs that came from the web search (the "searx" step). A NEW link that is one of
+    them is not "invented" (it was found by the search), so it is only mentioned in a note.
     """
     warnings, notes = [], []
 
@@ -230,10 +246,8 @@ def compare_texts(original: str, expanded: str):
         return ["the answer is empty"], notes
     if after < before:
         warnings.append(f"the rewrite is SHORTER than the original ({after} vs {before} words): it was not expanded")
-    elif before and after < before * MIN_GROWTH:
-        warnings.append(
-            f"only {100 * (after - before) // max(before, 1)}% longer than the original ({before} -> {after} words)"
-        )
+    # Little growth is NOT a warning here: free models often rewrite without adding much. It is
+    # reported separately by growth_caution() as a caution (yellow, does not fail the run).
 
     old_placeholders = len(_placeholders(original))
     new_placeholders = _placeholders(expanded)
@@ -248,6 +262,11 @@ def compare_texts(original: str, expanded: str):
         warnings.append(
             f"{len(missing)} link/image(s) of the original are missing, e.g. {missing[0]}"
         )
+    known = {u.rstrip(".,;:") for u in known_urls}
+    searched = [u for u in invented if u in known]
+    invented = [u for u in invented if u not in known]
+    if searched:
+        notes.append(f"{len(searched)} link(s) added from the web search (check them before publishing)")
     if invented:
         warnings.append(
             f"{len(invented)} NEW link/image(s) that are not in the original (models invent URLs), e.g. {invented[0]}"
@@ -277,31 +296,85 @@ def compare_texts(original: str, expanded: str):
 # --------------------------------------------------------------------------- #
 
 
-def _ask_openrouter(body: str, model, temperature):
+def _sleep(seconds: float) -> None:
+    """time.sleep, in a function so the tests can replace it."""
+    time.sleep(seconds)
+
+
+def _wait_before_retry(seconds: float, attempt: int, attempts: int, reason: str) -> None:
+    """Wait with a visible countdown (so a 5-minute pause does not look like a freeze)."""
+    first = reason.strip().splitlines()[0][:110] if reason.strip() else "no answer"
+    console.print(Text(f"  ! {first}", style=WARN_STYLE))
+    console.print(
+        Text(
+            f"  Waiting {seconds / 60:.0f} min before attempt {attempt + 1} of {attempts} "
+            "(free models are often busy; Ctrl-C to stop).",
+            style=WARN_STYLE,
+        )
+    )
+    remaining = int(seconds)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        transient=True,
+        console=console,
+    ) as progress:
+        task = progress.add_task("", total=None)
+        while remaining > 0:
+            progress.update(task, description=f"next attempt in {remaining // 60}:{remaining % 60:02d}")
+            step = min(5, remaining)
+            _sleep(step)
+            remaining -= step
+
+
+def _ask_openrouter(body: str, model, temperature, prompt: str = PROMPT_NAME):
+    """Ask OpenRouter; when it gives NO answer (empty, busy, timeout, 429, 5xx) wait and ask again.
+
+    EXPAND_RETRIES extra attempts (default 2), EXPAND_RETRY_WAIT seconds apart (default 300 = 5
+    minutes). A wrong key, no credits or a bad request are not retried: they would fail again.
+    Returns (text, model used, attempts made).
+    """
     from openrouter import OpenRouterError, call_openrouter
 
     settings = get_settings()
     shown = model or settings.openrouter_model
-    try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            TimeElapsedColumn(),
-            transient=True,
-            console=console,
-        ) as progress:
-            progress.add_task(f"Asking OpenRouter ({shown})...", total=None)
-            text, used = call_openrouter(
-                body, prompt=PROMPT_NAME, model=model, temperature=temperature
-            )
-    except OpenRouterError as exc:
-        raise ExpandError(str(exc)) from None
-    except ValueError as exc:
-        raise ExpandError(str(exc)) from None
-    return text, used
+    attempts = 1 + max(0, getattr(settings, "expand_retries", DEFAULT_EXPAND_RETRIES))
+    wait = getattr(settings, "expand_retry_wait", DEFAULT_EXPAND_RETRY_WAIT)
+    last_reason = ""
+    for attempt in range(1, attempts + 1):
+        if attempt > 1:
+            _wait_before_retry(wait, attempt - 1, attempts, last_reason)
+        try:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                TimeElapsedColumn(),
+                transient=True,
+                console=console,
+            ) as progress:
+                label = f"Asking OpenRouter ({shown})..." if attempt == 1 else f"Asking OpenRouter ({shown}), attempt {attempt}/{attempts}..."
+                progress.add_task(label, total=None)
+                text, used = call_openrouter(body, prompt=prompt, model=model, temperature=temperature)
+        except OpenRouterError as exc:
+            if getattr(exc, "retryable", False) and attempt < attempts:
+                last_reason = str(exc)
+                continue
+            message = str(exc)
+            if attempt > 1:
+                message += f"\n(asked {attempt} times; gave up)"
+            raise ExpandError(message) from None
+        except ValueError as exc:
+            raise ExpandError(str(exc)) from None
+        if text and text.strip():
+            return text, used, attempt
+        last_reason = "the model returned an empty answer"
+        if attempt == attempts:
+            raise ExpandError(f"the model returned an empty answer {attempts} times; try again later or choose another model")
+    raise ExpandError("no answer from OpenRouter")  # unreachable; keeps the function total
 
 
-def _ask_ollama(body: str, model, temperature):
+def _ask_ollama(body: str, model, temperature, prompt: str = PROMPT_NAME):
     from myollama import call_ollama
 
     settings = get_settings()
@@ -309,7 +382,7 @@ def _ask_ollama(body: str, model, temperature):
     try:
         text = call_ollama(
             body,
-            prompt=PROMPT_NAME,
+            prompt=prompt,
             model_name=used,
             temperature=0.7 if temperature is None else temperature,
             max_tokens=OLLAMA_MAX_TOKENS,
@@ -317,7 +390,7 @@ def _ask_ollama(body: str, model, temperature):
         )
     except (RuntimeError, ValueError) as exc:
         raise ExpandError(str(exc)) from None
-    return text, used
+    return text, used, 1
 
 
 # --------------------------------------------------------------------------- #
@@ -389,6 +462,8 @@ def _report(result: Expansion, page: Path, show_text: bool) -> None:
         console.print(Text("  copied to the clipboard", style=NEW_STYLE))
     for note in result.notes:
         console.print(Text(f"  i {note}", style=DIM_STYLE))
+    for caution in result.cautions:
+        console.print(Text(f"  ! {caution}", style=WARN_STYLE))
     for warning in result.warnings:
         console.print(Text(f"  ! {warning}", style=WARN_STYLE))
     if result.warnings:
@@ -410,6 +485,8 @@ def expand_article(
     save: bool = True,
     copy: bool = False,
     show: bool = True,
+    research: str = "",
+    research_urls=(),
 ) -> Expansion:
     """Rewrite and expand the article of `page`; return an Expansion.
 
@@ -420,6 +497,10 @@ def expand_article(
     save:        write a copy in EXPAND_OUTPUT_DIR (never inside content/).
     copy:        put the article on the macOS clipboard.
     show:        print the article and the report.
+    research:    optional web search results (text from mysearx.as_context). When given, the
+                 model gets them next to the article and uses the prompt
+                 `expand_article_research`; they are cut to MAX_RESEARCH_CHARS.
+    research_urls: the URLs inside `research`; links to them are not reported as invented.
 
     Raises ExpandError for every expected problem (empty page, no API key, network...).
     """
@@ -441,13 +522,31 @@ def expand_article(
         raise ExpandError(f"unknown provider {provider!r} (choose: {', '.join(EXPAND_PROVIDERS)})")
     folder = output_dir() if save else None  # fail BEFORE spending time on the model
 
+    research = (research or "").strip()[:MAX_RESEARCH_CHARS]
+    if research:
+        message = f"<article>\n{body}\n</article>\n\n<web_research>\n{research}\n</web_research>"
+        prompt = PROMPT_RESEARCH
+    else:
+        message, prompt = body, PROMPT_NAME
+
     started = time.monotonic()
     ask = _ask_openrouter if provider == "openrouter" else _ask_ollama
-    answer, used = ask(body, model, temperature)
+    answer, used, attempts = ask(message, model, temperature, prompt=prompt)
     seconds = time.monotonic() - started
 
     text, notes = clean_answer(answer)
-    warnings, more_notes = compare_texts(body, text)
+    if research:
+        # A model may echo the tags of our input format; they must never reach the website.
+        stripped = re.sub(r"</?(?:article|web_research)>\s*", "", text).strip()
+        if stripped != text:
+            text = stripped
+            notes.append("removed <article>/<web_research> tags the model echoed")
+    warnings, more_notes = compare_texts(body, text, known_urls=research_urls if research else ())
+    cautions = [c for c in (growth_caution(count_words(body), count_words(text)),) if c]
+    if attempts > 1:
+        more_notes.append(f"the model answered on attempt {attempts}")
+    if research:
+        more_notes.insert(0, "the rewrite used web search results")
     result = Expansion(
         text=text,
         provider=provider,
@@ -456,6 +555,8 @@ def expand_article(
         words_after=count_words(text),
         seconds=seconds,
         warnings=warnings,
+        cautions=cautions,
+        attempts=attempts,
         notes=notes + more_notes,
     )
     if not text.strip():

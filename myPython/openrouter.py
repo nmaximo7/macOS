@@ -67,11 +67,25 @@ KEYRING_USER = "OPENROUTER_API_KEY"
 ENV_VARIABLE = "OPENROUTER_API_KEY"
 
 
+# HTTP statuses that are worth trying again later: the request was fine, the service was not.
+RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 524, 529})
+
+
 class OpenRouterError(RuntimeError):
     """Anything that goes wrong here (no key, network, HTTP error, odd answer).
 
     The message is written for a human and NEVER contains the API key.
+
+    retryable: True when waiting and asking again can work (a free model that is busy, an empty
+               answer, a timeout, a network hiccup). False for a wrong key, no credits, a bad
+               request: asking again would fail the same way.
+    status:    the HTTP status, when there was one.
     """
+
+    def __init__(self, message: str = "", *, retryable: bool = False, status: "int | None" = None):
+        super().__init__(message)
+        self.retryable = retryable
+        self.status = status
 
 
 # --------------------------------------------------------------------------- #
@@ -217,22 +231,39 @@ def ask_openrouter(
             timeout=timeout,
         )
     except requests.Timeout:
-        raise OpenRouterError(f"OpenRouter did not answer within {timeout:g} seconds.") from None
+        raise OpenRouterError(f"OpenRouter did not answer within {timeout:g} seconds.", retryable=True) from None
     except requests.ConnectionError:
-        raise OpenRouterError("Could not reach openrouter.ai (is the internet working?).") from None
+        raise OpenRouterError("Could not reach openrouter.ai (is the internet working?).", retryable=True) from None
     except requests.RequestException as exc:
         raise OpenRouterError(f"Request failed: {type(exc).__name__}") from None
 
     if not response.ok:
-        raise OpenRouterError(_error_text(response))
+        raise OpenRouterError(
+            _error_text(response),
+            retryable=response.status_code in RETRYABLE_STATUS,
+            status=response.status_code,
+        )
 
     try:
         data = response.json()
-        return data["choices"][0]["message"]["content"], data.get("model", model)
-    except (ValueError, KeyError, IndexError, TypeError):
+    except ValueError:
         raise OpenRouterError(
-            "OpenRouter sent an answer in an unexpected format:\n" + response.text[:300]
+            "OpenRouter sent an answer in an unexpected format:\n" + response.text[:300], retryable=True
         ) from None
+    # Free models often answer HTTP 200 with an error object instead of a completion.
+    if isinstance(data, dict) and data.get("error") and not data.get("choices"):
+        error = data["error"]
+        message = error.get("message") if isinstance(error, dict) else str(error)
+        raise OpenRouterError(f"OpenRouter returned an error: {message or error}", retryable=True)
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise OpenRouterError(
+            "OpenRouter sent an answer in an unexpected format:\n" + response.text[:300], retryable=True
+        ) from None
+    if not isinstance(content, str) or not content.strip():
+        raise OpenRouterError("OpenRouter sent an EMPTY answer (a busy free model does this).", retryable=True)
+    return content, data.get("model", model)
 
 
 # --------------------------------------------------------------------------- #

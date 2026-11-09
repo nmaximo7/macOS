@@ -16,6 +16,8 @@
 #   searx.sh stop --quit-docker     stop SearXNG and always quit Docker Desktop (unless other
 #                                   containers are running)
 #   searx.sh restart        stop + start
+#   searx.sh reset          NO MATTER WHAT: stop the container, FORCE-QUIT Docker Desktop (even if it hangs),
+#                           launch it again and start SearXNG. For when `start` does not work.
 #   searx.sh update         newest SearXNG image (and Docker Desktop with --docker), recreate
 #   searx.sh status         is Docker up? is SearXNG up? does JSON search work?
 #   searx.sh test           run one JSON search and show the first results
@@ -375,6 +377,42 @@ maybe_quit_docker() {
   rm -f "$MARKER"
 }
 
+# Force-quit Docker Desktop, whatever state it is in: polite quit, then SIGTERM, then SIGKILL.
+hard_quit_docker() {
+  pgrep -f "Docker.app/Contents" >/dev/null 2>&1 || pgrep -f "com.docker" >/dev/null 2>&1 || return 0
+  info "Quitting Docker Desktop (forced if needed)..."
+  osascript -e 'quit app "Docker"' >/dev/null 2>&1
+  local i=0
+  while [ "$i" -lt 10 ]; do
+    pgrep -f "Docker.app/Contents" >/dev/null 2>&1 || break
+    sleep 2; i=$((i + 1))
+  done
+  if pgrep -f "Docker.app/Contents" >/dev/null 2>&1 || pgrep -f "com.docker" >/dev/null 2>&1; then
+    warn "Docker Desktop did not quit: terminating its processes"
+    pkill -f "Docker.app/Contents" >/dev/null 2>&1
+    pkill -f "com.docker" >/dev/null 2>&1
+    sleep 4
+    pkill -9 -f "Docker.app/Contents" >/dev/null 2>&1
+    pkill -9 -f "com.docker" >/dev/null 2>&1
+    sleep 2
+  fi
+}
+
+# reset: the "turn it off and on again" command. Personal computer, so it does not ask.
+cmd_reset() {
+  have curl || die "curl is needed"
+  ensure_config
+  warn "Resetting Docker and SearXNG (anything else running in Docker is stopped too)"
+  docker_ready && { compose down >/dev/null 2>&1; docker rm -f "$CONTAINER" >/dev/null 2>&1; }
+  if [ -d /Applications/Docker.app ]; then
+    hard_quit_docker
+  else
+    warn "Docker.app not found (Colima/OrbStack?): only the container is reset"
+  fi
+  ensure_docker
+  cmd_start
+}
+
 cmd_stop() {
   local mode="auto"
   case "${1:-}" in
@@ -434,6 +472,7 @@ case "${1:-help}" in
   start)          cmd_start ;;
   stop)           shift; cmd_stop "${1:-}" ;;
   restart)        stop_container; cmd_start ;;
+  reset)          cmd_reset ;;
   update)         shift; cmd_update "${1:-}" ;;
   status)         cmd_status ;;
   test)           cmd_test ;;

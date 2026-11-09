@@ -113,7 +113,11 @@ class CompareTexts(unittest.TestCase):
     def test_barely_longer_answer(self):
         original = "word " * 100
         warnings, _ = E.compare_texts(original, "word " * 105)
-        self.assertTrue(any("longer" in w for w in warnings))
+        self.assertFalse(any("longer" in w for w in warnings), "little growth is a caution, not a problem")
+        self.assertIn("only 5% longer", E.growth_caution(100, 105))
+        self.assertEqual(E.growth_caution(100, 130), "")
+        self.assertEqual(E.growth_caution(100, 90), "")  # shorter is a real warning, reported elsewhere
+        self.assertEqual(E.growth_caution(0, 10), "")
 
     def test_empty_answer(self):
         self.assertEqual(E.compare_texts(ARTICLE, "  ")[0], ["the answer is empty"])
@@ -202,7 +206,7 @@ class ExpandArticle(unittest.TestCase):
 
     def run_expand(self, answer=None, **kwargs):
         answer = self.expanded if answer is None else answer
-        with mock.patch.object(E, "_ask_openrouter", return_value=(answer, "vendor/model:free")) as ask, \
+        with mock.patch.object(E, "_ask_openrouter", return_value=(answer, "vendor/model:free", 1)) as ask, \
                 contextlib.redirect_stdout(io.StringIO()):
             result = E.expand_article(self.page, **kwargs)
         return result, ask
@@ -253,7 +257,7 @@ class ExpandArticle(unittest.TestCase):
         self.assertTrue(any("clipboard" in n for n in result.notes))
 
     def test_provider_ollama_uses_the_local_function(self):
-        with mock.patch.object(E, "_ask_ollama", return_value=(self.expanded, "local-model")) as local, \
+        with mock.patch.object(E, "_ask_ollama", return_value=(self.expanded, "local-model", 1)) as local, \
                 mock.patch.object(E, "_ask_openrouter") as hosted, contextlib.redirect_stdout(io.StringIO()):
             result = E.expand_article(self.page, provider="ollama")
         local.assert_called_once()
@@ -280,7 +284,7 @@ class ExpandArticle(unittest.TestCase):
             E.expand_article(self.root / "nope.md")
 
     def test_empty_answer_is_an_error(self):
-        with mock.patch.object(E, "_ask_openrouter", return_value=("<think>x</think>", "m")):
+        with mock.patch.object(E, "_ask_openrouter", return_value=("<think>x</think>", "m", 1)):
             with self.assertRaises(E.ExpandError):
                 E.expand_article(self.page, save=False)
 
@@ -431,3 +435,109 @@ class CallOpenRouter(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RetryWhenNoAnswer(unittest.TestCase):
+    """A free model that gives no answer is asked again after EXPAND_RETRY_WAIT seconds."""
+
+    def setUp(self):
+        self.settings = SimpleNamespace(openrouter_model="openrouter/free", expand_retries=2, expand_retry_wait=300.0)
+        for p in (mock.patch.object(E, "get_settings", return_value=self.settings),
+                  mock.patch.object(E, "_sleep")):
+            m = p.start()
+            self.addCleanup(p.stop)
+        self.sleeps = E._sleep
+        self.out = contextlib.redirect_stdout(io.StringIO())
+        self.out.__enter__()
+        self.addCleanup(self.out.__exit__, None, None, None)
+
+    def ask(self, side_effect):
+        with mock.patch("openrouter.call_openrouter", side_effect=side_effect) as call:
+            try:
+                return E._ask_openrouter("body", None, None), call
+            except E.ExpandError as exc:
+                return exc, call
+
+    def test_empty_then_answer_waits_five_minutes_once(self):
+        result, call = self.ask([openrouter.OpenRouterError("empty", retryable=True), ("good text", "m:free")])
+        self.assertEqual(result, ("good text", "m:free", 2))
+        self.assertEqual(call.call_count, 2)
+        self.assertEqual(sum(c.args[0] for c in self.sleeps.call_args_list), 300)  # 5 minutes in total
+
+    def test_blank_text_counts_as_no_answer(self):
+        result, call = self.ask([("   ", "m"), ("real", "m")])
+        self.assertEqual(result[2], 2)
+
+    def test_gives_up_after_the_retries(self):
+        error = openrouter.OpenRouterError("busy", retryable=True)
+        result, call = self.ask([error, error, error])
+        self.assertIsInstance(result, E.ExpandError)
+        self.assertEqual(call.call_count, 3)  # 1 + EXPAND_RETRIES
+        self.assertIn("gave up", str(result))
+        self.assertEqual(sum(c.args[0] for c in self.sleeps.call_args_list), 600)
+
+    def test_a_wrong_key_is_not_retried(self):
+        result, call = self.ask([openrouter.OpenRouterError("HTTP 401", retryable=False, status=401)])
+        self.assertIsInstance(result, E.ExpandError)
+        self.assertEqual(call.call_count, 1)
+        self.sleeps.assert_not_called()
+
+    def test_retries_can_be_switched_off(self):
+        self.settings.expand_retries = 0
+        result, call = self.ask([openrouter.OpenRouterError("busy", retryable=True)])
+        self.assertIsInstance(result, E.ExpandError)
+        self.assertEqual(call.call_count, 1)
+
+    def test_openrouter_marks_what_is_worth_retrying(self):
+        self.assertTrue({429, 503, 504} <= openrouter.RETRYABLE_STATUS)
+        self.assertFalse({400, 401, 402, 403, 404} & openrouter.RETRYABLE_STATUS)
+
+
+class _Resp:
+    """A response with any status and JSON payload."""
+
+    def __init__(self, status=200, payload=None):
+        self.status_code = status
+        self.ok = status < 400
+        self._payload = payload if payload is not None else {}
+        self.text = str(self._payload)
+
+    def json(self):
+        return self._payload
+
+
+class OpenRouterAnswers(unittest.TestCase):
+    """ask_openrouter marks free-model failures as retryable."""
+
+    def setUp(self):
+        p = mock.patch("openrouter.get_api_key", return_value="k")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def run_with(self, response):
+        with mock.patch("openrouter.requests.post", return_value=response):
+            try:
+                return openrouter.ask_openrouter("hello"), None
+            except openrouter.OpenRouterError as exc:
+                return None, exc
+
+    def test_empty_content_is_retryable(self):
+        _, exc = self.run_with(_Resp(payload={"choices": [{"message": {"content": ""}}], "model": "m"}))
+        self.assertTrue(exc.retryable)
+        _, exc = self.run_with(_Resp(payload={"choices": [{"message": {"content": None}}], "model": "m"}))
+        self.assertTrue(exc.retryable)
+
+    def test_error_object_in_a_200_is_retryable(self):
+        _, exc = self.run_with(_Resp(payload={"error": {"message": "Provider returned error", "code": 502}}))
+        self.assertTrue(exc.retryable)
+        self.assertIn("Provider returned error", str(exc))
+
+    def test_http_statuses(self):
+        for status, expected in ((429, True), (503, True), (401, False), (402, False)):
+            _, exc = self.run_with(_Resp(status=status, payload={"error": {"message": "x"}}))
+            self.assertEqual(exc.retryable, expected, status)
+            self.assertEqual(exc.status, status)
+
+    def test_a_good_answer_passes(self):
+        result, exc = self.run_with(_Resp(payload={"choices": [{"message": {"content": "hi"}}], "model": "m"}))
+        self.assertEqual(result, ("hi", "m"))

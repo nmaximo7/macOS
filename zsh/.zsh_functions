@@ -133,8 +133,38 @@ start_remote_webserver() {
 # Why not `echo ... || return`? echo never fails, so the `||` can never run. A check that CAN
 # fail has to test something (here: that the project and its virtualenv exist).
 # The hints on what to do after an error are printed by the program itself, at the end of its summary.
+# 👩🏻‍💻 content_creation [page.md] [options]: check and improve a Hugo page.
 content_creation() {
   local proj="$HOME/macOS/myPython"
   [[ -x "$proj/.venv/bin/python" ]] || { print -u2 "content_creation: no virtualenv in $proj (see ~/macOS/docs/docMymac/mypython.md, section 5)"; return 1; }
   ( cd "$proj" && .venv/bin/python content_creation.py "$@" )
+}
+
+# Shut down the Mac, forcibly closing Ghostty if necessary.
+# Usage:
+#   shutdownmac          # confirm first
+#   shutdownmac --now    # no confirmation
+shutdownmac() {
+  ssh -t server 'sudo shutdown -h now'
+  ssh nmaxi@192.168.1.12 "shutdown /s /t 0"
+  if [[ "$1" != "--now" ]]; then
+    printf 'Shut down this Mac now? [y/N] '
+    read -r reply
+    [[ "$reply" =~ ^[Yy]$ ]] || { echo "Cancelled."; return 1; }
+  fi
+
+  # Ask Ghostty to quit normally first.
+  osascript -e 'tell application "Ghostty" to quit' >/dev/null 2>&1
+
+  # Give it a moment, then force-quit if it is still running.
+  sleep 2
+  if pgrep -xq Ghostty; then
+    echo "Ghostty is still running; force-quitting it."
+    osascript -e 'tell application "Ghostty" to quit saving no' >/dev/null 2>&1
+    sleep 1
+    pkill -x Ghostty 2>/dev/null || true
+  fi
+
+  # Request a normal macOS shutdown.
+  osascript -e 'tell application "System Events" to shut down'
 }
