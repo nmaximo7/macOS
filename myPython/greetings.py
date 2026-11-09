@@ -150,7 +150,7 @@ def today():
     Returns:
         None.
     """
-    # Get the current date and time
+    # Get the current date and time.
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     # Display a horizontal ruler with the current date and time
     text_horizontalRuler(f"Today is {timestamp}")
