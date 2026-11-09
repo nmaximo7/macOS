@@ -124,7 +124,7 @@ def _parse_blocks(front: str) -> dict:
             blocks[current] = [line]
         elif current is not None:  # continuation of the previous key
             blocks[current].append(line)
-    for key, lines in blocks.items():  # drop trailing blank lines of each block
+    for lines in blocks.values():  # drop trailing blank lines of each block
         while len(lines) > 1 and not lines[-1].strip():
             lines.pop()
     return blocks

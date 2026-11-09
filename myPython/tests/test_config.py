@@ -1,7 +1,7 @@
 """myconfig: building Settings from environment variables (no .env file is read)."""
-
 import os
 import unittest
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest import mock
 
@@ -44,7 +44,7 @@ class Defaults(unittest.TestCase):
         self.assertEqual((s.author, s.featured_image, s.weather_city, s.topic), ("", "", "", ""))
 
     def test_settings_are_read_only(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(FrozenInstanceError):
             load().author = "x"
 
 

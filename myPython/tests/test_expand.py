@@ -444,7 +444,7 @@ class RetryWhenNoAnswer(unittest.TestCase):
         self.settings = SimpleNamespace(openrouter_model="openrouter/free", expand_retries=2, expand_retry_wait=300.0)
         for p in (mock.patch.object(E, "get_settings", return_value=self.settings),
                   mock.patch.object(E, "_sleep")):
-            m = p.start()
+            p.start()
             self.addCleanup(p.stop)
         self.sleeps = E._sleep
         self.out = contextlib.redirect_stdout(io.StringIO())

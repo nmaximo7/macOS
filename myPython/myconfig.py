@@ -82,10 +82,10 @@ Check your configuration at any time with:   python3 myconfig.py
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-import os
 
 import ollama  # the official Ollama Python library
 from dotenv import load_dotenv  # reads KEY=VALUE lines from a .env file

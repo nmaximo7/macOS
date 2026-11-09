@@ -19,9 +19,10 @@ Markdown and the running server.)
 """
 import os
 import time
-import requests
 from pathlib import Path
 from urllib.parse import unquote, urljoin, urlparse
+
+import requests
 from bs4 import BeautifulSoup
 
 

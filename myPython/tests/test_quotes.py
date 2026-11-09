@@ -71,7 +71,6 @@ class ResolveTopic(unittest.TestCase):
         self.assertEqual(t.name, "technology")
 
     def test_alias_gives_the_same_topic(self):
-        t = Q.resolve_topic("technology")
         for name, info in Q.TOPICS.items():
             if name == "technology" and info["aliases"]:
                 self.assertEqual(Q.resolve_topic(info["aliases"][0]).name, "technology")

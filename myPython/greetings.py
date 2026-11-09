@@ -1,18 +1,20 @@
-from colorama import Fore, Style, init
-from util import (
-    display_text_color,
-    text_horizontalRuler,
-    select_quote,
-    display_alarm_color,
-    stocks,
-)
-from datetime import datetime
 import calendar
 import re
-import requests
-import feedparser
+from datetime import datetime
 from urllib.parse import quote  # city names with spaces, e.g. "San Francisco"
+
+import feedparser
+import requests
+from colorama import Fore
+
 from myconfig import get_settings  # the ONE place that reads .env
+from util import (
+    display_alarm_color,
+    display_text_color,
+    select_quote,
+    stocks,
+    text_horizontalRuler,
+)
 
 
 def show_calendar():

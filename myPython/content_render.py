@@ -80,14 +80,14 @@ from content_urls import (
     BAD_STYLE,
     DIM_STYLE,
     OK_STYLE,
+    USER_AGENT,
     WARN_STYLE,
     Checker,
     HugoConfigError,
     PageContext,
-    USER_AGENT,
+    console,
     front_len,
     read_lines,
-    console,
 )
 
 # --------------------------------------------------------------------------- #
@@ -1081,7 +1081,8 @@ def check_browser_results(
             i for i in items if i.get("kind") == "scroll"
         ]  # acceptable: the formula scrolls inside its own box
         others = [i for i in items if i.get("kind") != "scroll"]
-        by_line = lambda i: src.by_fp.get(_squash(i.get("tex", "")), 0)
+        def by_line(i):
+            return src.by_fp.get(_squash(i.get("tex", "")), 0)
         dropped, hidden_scroll = [], 0
         if (
             label == "phone" and len(others) > PHONE_ROWS

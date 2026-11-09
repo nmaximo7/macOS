@@ -64,3 +64,10 @@ py-modules = [
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I"]   # pycodestyle errors, pyflakes (real bugs), bugbear, import order
+ignore = ["E501"]               # line length: not worth fighting

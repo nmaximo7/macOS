@@ -1,9 +1,8 @@
-from colorama import Fore, Style, init
-from datetime import datetime
-from rich.console import Console
-from rich.panel import Panel
-from rich.text import Text
 import re  # needed by normalize_string()
+from datetime import datetime
+
+from colorama import Fore, Style, init
+from rich.console import Console
 
 # NOTE: the third-party packages `quote` and `yfinance` are NOT imported here.
 # They are imported lazily inside select_quote() and stocks(), so that importing
