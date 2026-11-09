@@ -150,6 +150,7 @@ def today():
     Returns:
         None.
     """
+    # Use cowsay to show a fortune
     # Get the current date and time.
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     # Display a horizontal ruler with the current date and time
