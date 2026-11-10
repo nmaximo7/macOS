@@ -1,0 +1,29 @@
+{
+  "hotkey": {
+    "modifiers": ["command", "shift"],
+    "key": "d"
+  },
+  "apps": {
+    "folders": [
+      "/Applications",
+      "/System/Applications",
+      "/System/Applications/Utilities",
+      "~/Applications"
+    ],
+    "exclude": []
+  },
+  "search": {
+    "max_results": 8,
+    "ignore_accents": true,
+    "fuzzy": true
+  },
+  "commands": [
+    {
+      "id": "shutdown",
+      "title": "Shutdown",
+      "action": "shutdown",
+      "keywords": ["shut down", "power off", "turn off"],
+      "confirm": true
+    }
+  ]
+}

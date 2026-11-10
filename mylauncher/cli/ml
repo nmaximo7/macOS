@@ -1,0 +1,5 @@
+#!/bin/bash
+# ml - a one-line shortcut:   ml search obs   ==   python3 /path/to/mylauncher/cli/mylauncher.py search obs
+# "$0" is this file; we resolve symlinks so the shortcut works even when called through an alias.
+here="$(cd "$(dirname "$(readlink "$0" 2>/dev/null || echo "$0")")" && pwd)"
+exec python3 "$here/mylauncher.py" "$@"
