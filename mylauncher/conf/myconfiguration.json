@@ -1,7 +1,13 @@
 {
   "hotkey": {
     "modifiers": ["command", "shift"],
-    "key": "d"
+    "key": "m"
+  },
+  "window": {
+    "title": "mylauncher",
+    "width": 640,
+    "font_size": 20,
+    "top_offset": 160
   },
   "apps": {
     "folders": [

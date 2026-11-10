@@ -1,9 +1,10 @@
-# app/ - the window (not built yet)
+# app/ - the window
 
-This folder is empty on purpose. In **step 2** we will add the window here: a search box, a list of
-suggestions and the keyboard handling. The window will contain **no logic**: for every key you type it
-will run `cli/mylauncher.py search "<text>" --json` and draw the answer; when you press Enter it will
-run `cli/mylauncher.py run --id <id>`.
+Thin graphical layer (tkinter + pynput) on top of `cli/`. It holds no search or action logic:
+for each keystroke it runs `cli/mylauncher.py search "<text>" --json`, and on Enter `run --id <id> --yes --json`.
 
-See `docs/03-implementation.md`, section "Roadmap", for the decisions we still have to take (which
-window toolkit to use) and `docs/04-journal.md` for the step-by-step log.
+    mylauncher-app             start (hidden); press the hotkey (Command+D by default)
+    mylauncher-app --show      start and show the window
+    mylauncher-app --hotkey-test   check the hotkey / permissions, no window
+
+Installation (including the macOS permissions): `../docs/01-installation.md`. Internals: `../docs/03-implementation.md`.

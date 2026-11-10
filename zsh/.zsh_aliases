@@ -96,3 +96,5 @@ fi
 #       HostName yourIpServer
 #       User yourUser
 #       Port 2222
+
+alias ml="$HOME/macOS/mylauncher/cli/ml"

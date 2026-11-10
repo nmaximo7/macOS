@@ -48,7 +48,7 @@ class Config:
     """All the settings, checked and with the right types."""
 
     path: Path  # which file they came from
-    hotkey_modifiers: tuple  # ("command", "shift")   (used by the window, from step 3)
+    hotkey_modifiers: tuple  # ("command",)   (used by the window, app/)
     hotkey_key: str  # "d"
     app_folders: tuple  # folders searched for *.app (already expanded: ~ becomes /Users/you)
     app_exclude: tuple  # app names to hide (lower case)
@@ -56,6 +56,10 @@ class Config:
     ignore_accents: bool  # True: "cafe" finds "Café"
     fuzzy: bool  # True: letters in order also match ("sfr" finds "Safari")
     commands: tuple  # tuple of CommandDef
+    window_title: str = "mylauncher"  # title of the window
+    window_width: int = 640  # width in pixels
+    window_font_size: int = 20  # size of the letters
+    window_top_offset: int = 160  # pixels between the top of the screen and the window
 
 
 # --------------------------------------------------------------------------- #
@@ -173,6 +177,17 @@ def parse_config(data, path: Path) -> Config:
             )
         )
 
+    # ---- window (optional: every value has a default) -----------------------
+    window = data.get("window", {})
+    _check(window, dict, "window")
+    window_title = _check(window.get("title", "mylauncher"), str, "window.title")
+    sizes = {}
+    for name, default in (("width", 640), ("font_size", 20), ("top_offset", 160)):
+        value = _check(window.get(name, default), int, f"window.{name}")
+        if value < (0 if name == "top_offset" else 1):
+            raise ConfigError(f"window.{name} is too small")
+        sizes[name] = value
+
     return Config(
         path=Path(path),
         hotkey_modifiers=modifiers,
@@ -183,4 +198,8 @@ def parse_config(data, path: Path) -> Config:
         ignore_accents=ignore_accents,
         fuzzy=fuzzy,
         commands=tuple(commands),
+        window_title=window_title,
+        window_width=sizes["width"],
+        window_font_size=sizes["font_size"],
+        window_top_offset=sizes["top_offset"],
     )

@@ -11,8 +11,9 @@ from myconfig import ConfigError, find_config_path, load_config, parse_config
 class RealFile(unittest.TestCase):
     def test_the_configuration_that_ships_with_the_project_is_valid(self):
         config = load_config(support.REAL_CONFIG)
-        self.assertEqual(config.hotkey_modifiers, ("command", "shift"))
+        self.assertEqual(config.hotkey_modifiers, ("command",))
         self.assertEqual(config.hotkey_key, "d")
+        self.assertEqual((config.window_width, config.window_font_size), (640, 20))
         self.assertEqual([c.id for c in config.commands], ["shutdown"])
         self.assertTrue(config.commands[0].confirm)
 
@@ -100,6 +101,16 @@ class Checking(unittest.TestCase):
             support.good_config(commands=[{"id": "shutdown", "title": "Shutdown", "action": "shutdown"}]), Path("x")
         )
         self.assertEqual((config.commands[0].keywords, config.commands[0].confirm), ((), False))
+
+    def test_window_section_is_optional_and_checked(self):
+        defaults = parse_config(support.good_config(), Path("x"))
+        self.assertEqual((defaults.window_title, defaults.window_width), ("mylauncher", 640))
+        custom = parse_config(support.good_config(window={"width": 800, "title": "go"}), Path("x"))
+        self.assertEqual((custom.window_title, custom.window_width, custom.window_font_size), ("go", 800, 20))
+        self.assertBad(support.good_config(window={"width": "wide"}), "window.width")
+        self.assertBad(support.good_config(window={"width": 0}), "window.width")
+        self.assertBad(support.good_config(window={"top_offset": -5}), "window.top_offset")
+        self.assertBad(support.good_config(window=[]), "window")
 
     def test_exclude_is_lower_cased(self):
         data = support.good_config(apps={"folders": [], "exclude": ["Boot Camp Assistant"]})

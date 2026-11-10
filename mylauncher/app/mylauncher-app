@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Starts the window. Uses the virtual environment in mylauncher/.venv if it exists (that is where
+# pynput is installed, see docs/01-installation.md), otherwise the python3 of your PATH.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python="$here/../.venv/bin/python"
+[ -x "$python" ] || python="python3"
+exec "$python" "$here/mylauncher_app.py" "$@"

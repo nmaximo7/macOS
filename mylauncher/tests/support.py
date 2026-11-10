@@ -8,8 +8,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CLI = ROOT / "cli"
-if str(CLI) not in sys.path:
-    sys.path.insert(0, str(CLI))  # so that "import myconfig" works, exactly as when the scripts run
+APP = ROOT / "app"
+for folder in (CLI, APP):
+    if str(folder) not in sys.path:
+        sys.path.insert(0, str(folder))  # so that "import myconfig" works, exactly as when the scripts run
 
 REAL_CONFIG = ROOT / "conf" / "myconfiguration.json"
 

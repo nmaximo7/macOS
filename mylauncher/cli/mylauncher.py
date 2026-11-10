@@ -41,7 +41,7 @@ from myconfig import Config, ConfigError, find_config_path, load_config
 from mysearch import complete, rank
 from mytypes import Item
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 
 # --------------------------------------------------------------------------- #
@@ -195,7 +195,7 @@ def cmd_doctor(args, config: Config | None = None, config_error: str = "", **_) 
         results.append(("✘", config_error or "configuration could not be read"))
     else:
         results.append(("✔", f"configuration: {config.path}"))
-        results.append(("✔", f"hotkey: {'+'.join(config.hotkey_modifiers)}+{config.hotkey_key} (used by the window, from step 3)"))
+        results.append(("✔", f"hotkey: {'+'.join(config.hotkey_modifiers)}+{config.hotkey_key} (used by the window in app/)"))
         for folder in config.app_folders:
             results.append(("✔" if folder.is_dir() else "!", f"app folder {folder}" + ("" if folder.is_dir() else " does not exist")))
         apps = find_apps(config.app_folders, config.app_exclude)
