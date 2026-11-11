@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Manage the start-at-login agent. Uses .venv/bin/python (the SAME Python the agent will run).
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python="$here/../.venv/bin/python"
+[ -x "$python" ] || python="python3"
+exec "$python" "$here/myautostart.py" "$@"

@@ -1,9 +1,9 @@
 # mylauncher
 
 A small launcher for macOS in the spirit of Raycast or Alfred, built **slowly, in Python, for learning**.
-Press a hotkey (default **Command+D**), type, see suggestions, press Enter.
+Press a hotkey (default **Command+Shift+D**), type, see suggestions, press Enter.
 
-> Status: **step 2 of N**. Engine, command line, tkinter window and Command+D hotkey are built; see `docs/04-journal.md`.
+> Status: **step 3 of N**. Engine, command line, tkinter window, Command+D hotkey and start at login are built; see `docs/04-journal.md`.
 
 ## Layout
 

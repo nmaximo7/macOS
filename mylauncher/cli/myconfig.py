@@ -60,6 +60,9 @@ class Config:
     window_width: int = 640  # width in pixels
     window_font_size: int = 20  # size of the letters
     window_top_offset: int = 160  # pixels between the top of the screen and the window
+    autostart_label: str = "com.mylauncher.app"  # name of the launchd agent (and of its .plist file)
+    autostart_log_dir: Path = Path("~/Library/Logs/mylauncher").expanduser()  # where the app writes its log
+    autostart_keep_alive: bool = True  # launchd restarts the app if it crashes
 
 
 # --------------------------------------------------------------------------- #
@@ -188,6 +191,15 @@ def parse_config(data, path: Path) -> Config:
             raise ConfigError(f"window.{name} is too small")
         sizes[name] = value
 
+    # ---- autostart (optional: every value has a default) ---------------------
+    autostart = data.get("autostart", {})
+    _check(autostart, dict, "autostart")
+    label = _check(autostart.get("label", "com.mylauncher.app"), str, "autostart.label")
+    if not label or any(c in label for c in " /\\"):
+        raise ConfigError('autostart.label must be a name without spaces or slashes, e.g. "com.mylauncher.app"')
+    log_dir = Path(_check(autostart.get("log_dir", "~/Library/Logs/mylauncher"), str, "autostart.log_dir")).expanduser()
+    keep_alive = _check(autostart.get("keep_alive", True), bool, "autostart.keep_alive")
+
     return Config(
         path=Path(path),
         hotkey_modifiers=modifiers,
@@ -202,4 +214,7 @@ def parse_config(data, path: Path) -> Config:
         window_width=sizes["width"],
         window_font_size=sizes["font_size"],
         window_top_offset=sizes["top_offset"],
+        autostart_label=label,
+        autostart_log_dir=log_dir,
+        autostart_keep_alive=keep_alive,
     )

@@ -5,6 +5,7 @@ mylauncher_app.py - starts the launcher: the window plus the global hotkey.
     python3 app/mylauncher_app.py                 start; press the hotkey (Command+D by default)
     python3 app/mylauncher_app.py --show          also show the window at start (to try it without the hotkey)
     python3 app/mylauncher_app.py --hotkey-test   only test the hotkey: prints a line each time you press it
+    python3 app/mylauncher_app.py --keys          print every key pressed (diagnose permissions)
     python3 app/mylauncher_app.py --config FILE   another configuration file
 
 How threads fit together (the one tricky part of this project):
@@ -30,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from myconfig import ConfigError, find_config_path, load_config  # noqa: E402
 from myengine import Engine  # noqa: E402
-from myhotkey import HotkeyListener, describe  # noqa: E402
+from myhotkey import HotkeyListener, describe, permission_report, watch_keys  # noqa: E402
 
 POLL_MS = 100  # how often the main thread looks at the queue
 
@@ -40,11 +41,35 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", metavar="FILE", help="configuration file")
     parser.add_argument("--show", action="store_true", help="show the window right away")
     parser.add_argument("--hotkey-test", action="store_true", help="only print a line when the hotkey is pressed")
+    parser.add_argument("--keys", action="store_true", help="print EVERY key the program can see (to diagnose permissions)")
     return parser
+
+
+def print_permissions() -> None:
+    for symbol, text in permission_report():
+        print(f" {symbol} {text}")
+
+
+def keys_test() -> int:
+    """No window, no hotkey: print every key. The simplest way to know if macOS lets us see the keyboard."""
+    print(f"python: {sys.executable}")
+    print_permissions()
+    try:
+        listener = watch_keys()
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print("Press any keys, in any application. Nothing printed = permissions. Ctrl+C to stop.")
+    try:
+        listener.join()
+    except KeyboardInterrupt:
+        pass
+    return 0
 
 
 def hotkey_test(config) -> int:
     """No window: just prove that the permission and the key combination work."""
+    print_permissions()
     name = describe(config.hotkey_modifiers, config.hotkey_key)
     listener = HotkeyListener(config.hotkey_modifiers, config.hotkey_key, lambda: print(f"hotkey {name} pressed"))
     try:
@@ -68,6 +93,8 @@ def run(config, config_path, show: bool) -> int:
         return 1
     from mywindow import LauncherWindow  # imported here because it needs tkinter
 
+    print(f"python: {sys.executable}", flush=True)  # these lines go to the log file when started at login
+    print_permissions()
     root = tk.Tk()
     root.withdraw()  # start hidden: the hotkey shows it
     window = LauncherWindow(root, Engine(config_path=config_path), config)
@@ -86,6 +113,7 @@ def run(config, config_path, show: bool) -> int:
             except queue.Empty:
                 break
             window.toggle()
+            print(f"hotkey received: window {'shown' if window.visible else 'hidden'}")  # proof that each step worked
         root.after(POLL_MS, poll)
 
     if show:
@@ -109,6 +137,8 @@ def main(argv=None) -> int:
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    if args.keys:
+        return keys_test()
     return hotkey_test(config) if args.hotkey_test else run(config, config_path, args.show)
 
 

@@ -1,13 +1,18 @@
 {
   "hotkey": {
-    "modifiers": ["command", "shift"],
-    "key": "m"
+    "modifiers": ["command"],
+    "key": "d"
   },
   "window": {
     "title": "mylauncher",
     "width": 640,
     "font_size": 20,
     "top_offset": 160
+  },
+  "autostart": {
+    "label": "com.mylauncher.app",
+    "log_dir": "~/Library/Logs/mylauncher",
+    "keep_alive": true
   },
   "apps": {
     "folders": [

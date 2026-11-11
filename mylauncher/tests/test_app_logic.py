@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import support  # noqa: F401  (puts cli/ and app/ on the import path)
 from myengine import Engine, EngineError
-from myhotkey import HotkeyListener, describe, to_pynput
+from myhotkey import HotkeyListener, HotkeyMatcher, describe, normalise, permission_report, watch_keys
 from mystate import LauncherState
 
 ANSWER = {
@@ -105,19 +105,97 @@ class EngineClient(unittest.TestCase):
         self.assertEqual(self.engine(FakeProcess(json.dumps({"error": "no item"}))).run("x"), (False, "no item"))
 
 
+class Key:
+    """A fake pynput key: special keys have a .name (Key.cmd), letters have a .char."""
+
+    def __init__(self, name=None, char=None):
+        self.name, self.char = name, char
+
+
+CMD, CMD_R, SHIFT, ALT, TAB = Key("cmd"), Key("cmd_r"), Key("shift"), Key("alt"), Key("tab")
+D, UPPER_D = Key(char="d"), Key(char="D")
+
+
 class Hotkey(unittest.TestCase):
-    def test_translation(self):
-        self.assertEqual(to_pynput(("command",), "d"), "<cmd>+d")
-        self.assertEqual(to_pynput(("command", "shift", "option", "control"), "d"), "<cmd>+<shift>+<alt>+<ctrl>+d")
+    def matcher(self, modifiers=("command",), key="d"):
+        self.fired = []
+        return HotkeyMatcher(modifiers, key, lambda: self.fired.append(1))
+
+    def test_describe(self):
         self.assertEqual(describe(("command",), "d"), "command+d")
 
-    def test_listener_registers_the_combination_and_stops(self):
+    def test_normalise(self):
+        self.assertEqual(normalise(CMD), ("modifier", "command"))
+        self.assertEqual(normalise(CMD_R), ("modifier", "command"))  # right Command counts too
+        self.assertEqual(normalise(Key("alt_gr")), ("modifier", "option"))
+        self.assertEqual(normalise(Key("ctrl_l")), ("modifier", "control"))
+        self.assertEqual(normalise(UPPER_D), ("key", "d"))
+        self.assertIsNone(normalise(TAB))
+        self.assertIsNone(normalise(Key()))
+
+    def test_fires_on_the_combination(self):
+        m = self.matcher()
+        m.press(CMD)
+        m.press(D)
+        self.assertEqual(self.fired, [1])
+
+    def test_the_exact_sequence_seen_on_the_real_mac(self):
+        # --keys printed: cmd pressed, d pressed, cmd released, d released
+        m = self.matcher()
+        for action, key in (("p", CMD), ("p", D), ("r", CMD), ("r", D)):
+            (m.press if action == "p" else m.release)(key)
+        self.assertEqual(self.fired, [1])
+
+    def test_the_letter_alone_does_nothing(self):
+        m = self.matcher()
+        m.press(D)
+        self.assertEqual(self.fired, [])
+
+    def test_extra_modifiers_do_not_fire(self):
+        m = self.matcher()
+        m.press(CMD)
+        m.press(SHIFT)
+        m.press(UPPER_D)  # Command+Shift+D is another shortcut
+        self.assertEqual(self.fired, [])
+
+    def test_several_modifiers_in_any_order(self):
+        m = self.matcher(("command", "shift"))
+        m.press(SHIFT)
+        m.press(CMD)
+        m.press(UPPER_D)
+        self.assertEqual(self.fired, [1])
+
+    def test_holding_the_key_fires_once_and_again_after_release(self):
+        m = self.matcher()
+        m.press(CMD)
+        m.press(D)
+        m.press(D)  # auto-repeat
+        self.assertEqual(self.fired, [1])
+        m.release(D)
+        m.press(D)  # pressed again, Command still down
+        self.assertEqual(self.fired, [1, 1])
+
+    def test_releasing_the_modifier_disarms(self):
+        m = self.matcher()
+        m.press(CMD)
+        m.release(CMD)
+        m.press(D)
+        self.assertEqual(self.fired, [])
+
+    def test_unrelated_keys_are_ignored(self):
+        m = self.matcher()
+        m.press(CMD)
+        m.press(TAB)  # Command+Tab: switching apps
+        m.release(TAB)
+        self.assertEqual(self.fired, [])
+
+    def test_listener_connects_pynput_to_the_matcher_and_stops(self):
         made = {}
 
-        class FakeHotKeys:
-            def __init__(self, mapping):
-                made["mapping"], self.started, self.stopped = mapping, False, False
-                made["obj"] = self
+        class FakeListener:
+            def __init__(self, on_press, on_release):
+                made["press"], made["release"], made["obj"] = on_press, on_release, self
+                self.started = self.stopped = False
 
             def start(self):
                 self.started = True
@@ -126,10 +204,11 @@ class Hotkey(unittest.TestCase):
                 self.stopped = True
 
         pressed = []
-        listener = HotkeyListener(("command",), "d", lambda: pressed.append(1), factory=FakeHotKeys)
+        listener = HotkeyListener(("command",), "d", lambda: pressed.append(1), factory=FakeListener)
         listener.start()
         self.assertTrue(made["obj"].started)
-        made["mapping"]["<cmd>+d"]()  # "press" the keys
+        made["press"](CMD)
+        made["press"](D)  # "type" the keys through pynput's callbacks
         self.assertEqual(pressed, [1])
         listener.stop()
         self.assertTrue(made["obj"].stopped)
@@ -143,6 +222,41 @@ class Hotkey(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 HotkeyListener(("command",), "d", lambda: None).start()
         self.assertIn("pip install pynput", str(ctx.exception))
+
+
+class Diagnostics(unittest.TestCase):
+    def test_not_a_mac_reports_nothing(self):
+        self.assertEqual(permission_report(platform="linux"), [])
+
+    def test_report_on_a_mac(self):
+        report = permission_report("darwin", accessibility=lambda: True, monitoring=lambda: 0)
+        self.assertEqual([s for s, _ in report], ["✔", "✔"])
+        report = permission_report("darwin", accessibility=lambda: False, monitoring=lambda: 1)
+        self.assertEqual([s for s, _ in report], ["✘", "✘"])
+        self.assertIn("NOT granted", report[0][1])
+        self.assertIn("not asked", permission_report("darwin", lambda: True, lambda: 2)[1][1])
+
+    def test_failing_checks_do_not_crash(self):
+        def boom():
+            raise OSError("no such framework")
+
+        self.assertEqual([s for s, _ in permission_report("darwin", boom, boom)], ["!", "!"])
+
+    def test_watch_keys_prints_presses_and_releases(self):
+        lines = []
+
+        class FakeListener:
+            def __init__(self, on_press, on_release):
+                self.on_press, self.on_release, self.started = on_press, on_release, False
+
+            def start(self):
+                self.started = True
+
+        listener = watch_keys(printer=lines.append, factory=FakeListener)
+        self.assertTrue(listener.started)
+        listener.on_press("KEY_A")
+        listener.on_release("KEY_A")
+        self.assertEqual(lines, ["pressed   'KEY_A'", "released  'KEY_A'"])
 
 
 if __name__ == "__main__":
