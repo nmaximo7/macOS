@@ -74,7 +74,7 @@ peewee==4.5.3
     # via yfinance
 platformdirs==4.14.5
     # via yfinance
-playwright==1.65.0
+playwright==1.65.1
     # via -r requirements.in
 protobuf==7.36.2
     # via yfinance

@@ -105,7 +105,35 @@ class Ranking(unittest.TestCase):
         self.assertEqual(len(rank(ITEMS, "   ")), len(ITEMS))
 
 
+class Bonus(unittest.TestCase):
+    def test_bonus_reorders_equal_matches(self):
+        used = {"app:Zen": 7}
+        result = rank(ITEMS, "z", fuzzy=False, bonus=lambda i: min(used.get(i.id, 0) * 2, 10))
+        self.assertEqual(result[0].item.title, "Run Zen")
+        self.assertEqual(result[0].score, SCORE_WORD + 10)
+
+    def test_empty_query_puts_favourites_first(self):
+        used = {"app:Safari": 3, "app:Zen": 5}
+        result = rank(ITEMS, "", bonus=lambda i: used.get(i.id, 0))
+        self.assertEqual(titles(result)[:3], ["Run Zen", "Run Safari", "Shutdown"])
+
+    def test_a_small_bonus_never_beats_a_better_kind_of_match(self):
+        items = [app("Obsidian"), app("Zen Obs")]
+        # "obs": Obsidian = a word starts with it (60); "Zen Obs" also (60). Make an INSIDE match with the max bonus:
+        inside = Item("app:Xobsx", "Run Xobsx", "app", "open_app")
+        result = rank([*items, inside], "obs", bonus=lambda i: 10 if i.id == "app:Xobsx" else 0)
+        self.assertEqual(result[-1].item.id, "app:Xobsx")  # 40 + 10 = 50 < 60
+
+    def test_bonus_is_not_given_to_items_that_do_not_match(self):
+        self.assertEqual(rank(ITEMS, "qqq", bonus=lambda i: 10), [])
+
+
 class Complete(unittest.TestCase):
+    def test_item_with_its_own_completion_wins(self):
+        hint = Item("link:yt", "Search youtube.com (yt <text>)", "prefix", "prefix_hint", keywords=("yt",), complete="yt ")
+        self.assertEqual(complete("y", rank([hint], "y")), "yt ")
+
+
     def test_completion_is_the_best_title_in_lower_case(self):
         self.assertEqual(complete("obs", rank(ITEMS, "obs")), "run obsidian")
         self.assertEqual(complete("shu", rank(ITEMS, "shu")), "shutdown")

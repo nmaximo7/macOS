@@ -1,0 +1,47 @@
+https://squirrelscan.com/, install curl -fsSL https://install.squirrelscan.com | bash
+
+## What I Did
+
+1. **Ran squirrelscan audit** against `https://justtothepoint.com` with `--level quick --format llm -m 10` (10 pages)
+2. **Analyzed the LLM report** — score: 50/100 (F), identifying 67 issues across SEO, performance, accessibility, security, and content categories
+3. **Mapped issues to Hugo source locations** — identified the Hugo project at `/Volumes/DatosSlave/_history/MacDatosMaster/2026-11-11_170228/justtothepoint` with content in `/content/` subdirectories (calculusI, calculusIII, complex, selfhelp, selfhelpes)
+4. **Proposed Batch 1 fixes** (SEO/structure — highest score impact) across 5 categories:
+   - Add `<main>` landmark in `layouts/_default/baseof.html`
+   - Fix H1 hierarchy in `layouts/_default/single.html`
+   - Absolute canonical URLs in `layouts/partials/head.html`
+   - Fix meta titles/descriptions in content frontmatter
+   - Remove dev leakage in `content/maths/bignaughtylist.md`
+
+## Files Modified / Explored
+
+| Action | Status | Details |
+|--------|--------|---------|
+| **Ran audit** | ✅ Complete | 10 pages, score 50/100 (F) |
+| **Identified Hugo source** | ✅ Mapped | `/Volumes/DatosSlave/_history/MacDatosMaster/2026-11-11_170228/justtothepoint/content/` |
+| **Applied fixes** | ❌ Not applied | Permission denied on `/Volumes/MacDatosMaster/justtothepoint/` |
+| **Re-audit** | ❌ Not run | Workflow interrupted |
+
+## Improvements Proposed (Batch 1 — SEO/Structure)
+
+| Fix | Target File | Expected Impact |
+|-----|-------------|-----------------|
+| Add `<main>` landmark | `layouts/_default/baseof.html` | +5–10 points (Accessibility) |
+| Fix single H1 per page | `layouts/_default/single.html` | +5–10 points (Core SEO) |
+| Absolute canonical URLs | `layouts/partials/head.html` or SEO config | +5–10 points (Core SEO) |
+| Fix meta titles/descriptions | Content frontmatter (`selfhelp/`, `selfhelpes/`) | +5–10 points (Core SEO) |
+| Remove dev leakage | `content/maths/bignaughtylist.md` | +5 points (Reliability/Content) |
+
+## Current Blockers
+
+- **Permission denied** on `/Volumes/MacDatosMaster/justtothepoint/` — cannot read Hugo layouts/partials to apply fixes
+- **Hugo source location uncertainty** — project may also exist at other paths
+- **Async command completion** interrupted the workflow before fixes could be applied
+
+## Next Steps (If You Want to Continue)
+
+1. **Grant access** to `/Volumes/MacDatosMaster/justtothepoint/` or provide the Hugo source path
+2. **Apply Batch 1 fixes** to the identified Hugo files
+3. **Run re-audit** with `--level quick --max-pages 10` to show before/after scores
+4. **Proceed to Batch 2** (images/performance) and Batch 3 (security headers) if desired
+
+**Would you like me to proceed with applying the Batch 1 fixes once the Hugo source is accessible, or would you prefer a different approach?**

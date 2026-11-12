@@ -1,5 +1,9 @@
 #!/bin/bash
 # ml - a one-line shortcut:   ml search obs   ==   python3 /path/to/mylauncher/cli/mylauncher.py search obs
 # "$0" is this file; we resolve symlinks so the shortcut works even when called through an alias.
+# It prefers the Python of the project's virtual environment (.venv): that is where PyYAML lives,
+# which the Espanso snippets need. Without .venv it uses python3 (everything but snippets works).
 here="$(cd "$(dirname "$(readlink "$0" 2>/dev/null || echo "$0")")" && pwd)"
-exec python3 "$here/mylauncher.py" "$@"
+python="$here/../.venv/bin/python"
+[ -x "$python" ] || python="python3"
+exec "$python" "$here/mylauncher.py" "$@"

@@ -19,17 +19,29 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+class ConfigError(Exception):
+    """A configuration file (myconfiguration.json or quicklinks.json) is missing or wrong.
+
+    It lives here, in the file everybody imports, so that myconfig.py and myquicklinks.py can both
+    raise it without importing each other.
+    """
+
+
 @dataclass(frozen=True)
 class Item:
     """One thing the launcher can do."""
 
     id: str  # unique name, used to pick an exact item: "app:Obsidian" or "cmd:shutdown"
     title: str  # what the user sees in the list: "Run Obsidian"
-    kind: str  # "app" (open a program) or "command" (something else, e.g. shutdown)
+    kind: str  # "app", "command" (e.g. shutdown), "prefix" (a word that needs more text after it: "yt", "kill"),
+    #            "quicklink" (a web search ready to open), "kill" (a running app that can be closed)
+    #            or "snippet" (a piece of text from your Espanso files, copied to the clipboard)
     action: str  # which function in myactions.py does the work: "open_app" or "shutdown"
     target: str = ""  # for kind="app": the path of the .app folder, e.g. /Applications/Obsidian.app
     keywords: tuple = ()  # extra words that also find this item ("power off" finds Shutdown)
     confirm: bool = False  # True = ask "are you sure?" before doing it
+    complete: str = ""  # what Tab writes in the search box; empty = the title in lower case
+    subtitle: str = ""  # grey extra text shown after the title (not searched), e.g. the text of a snippet
 
     def to_dict(self) -> dict:
         """A plain dictionary, ready to be written as JSON (this is what the GUI will read)."""
@@ -41,6 +53,8 @@ class Item:
             "target": self.target,
             "keywords": list(self.keywords),
             "confirm": self.confirm,
+            "complete": self.complete,
+            "subtitle": self.subtitle,
         }
 
 

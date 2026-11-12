@@ -8,6 +8,9 @@ pretty skin that calls this program.
     python3 cli/mylauncher.py complete obs               what Tab would write:  run obsidian
     python3 cli/mylauncher.py run obsidian               do the best match (like pressing Enter)
     python3 cli/mylauncher.py run --id cmd:shutdown      do one exact item
+    python3 cli/mylauncher.py search yt lofi             a quicklink: keyword, space, query
+    python3 cli/mylauncher.py run kill ghostty           close an app (--force if it will not quit)
+    python3 cli/mylauncher.py history                    what you use most (--clear forgets it)
     python3 cli/mylauncher.py config                     where the settings are, and what they say
     python3 cli/mylauncher.py doctor                     check that everything is in place
 
@@ -22,7 +25,8 @@ How the pieces fit (one arrow = "uses"):
     mylauncher.py  ->  myconfig.py  (read the settings)
                    ->  myapps.py    (find the apps)
                    ->  mysearch.py  (rank the matches)
-                   ->  myactions.py (do the thing)
+                   ->  myactions.py (do the thing)   ->  mykill.py (which apps are running)
+                   ->  myquicklinks.py (web searches)    myhistory.py (most used first)
     all of them share the data shapes of  mytypes.py
 
 Exit codes:  0 = all good   1 = nothing found / action failed / cancelled   2 = bad usage or bad configuration
@@ -31,17 +35,27 @@ Exit codes:  0 = all good   1 = nothing found / action failed / cancelled   2 = 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
+import os
 import shutil
 import sys
+import time
+from pathlib import Path
 
-from myactions import default_runner, run_item
+from myactions import RunOptions, default_runner, run_item
 from myapps import find_apps
 from myconfig import Config, ConfigError, find_config_path, load_config
-from mysearch import complete, rank
-from mytypes import Item
+from myexpander import load_snippets, preview
+from myhistory import History
+from mykill import running_apps
+from myquicklinks import build_url
+from mysearch import complete, rank, split_prefix
+from mytypes import Item, Match
 
-VERSION = "0.2.0"
+VERSION = "0.5.0"
+
+SCORE_MODE = 200  # a quicklink you have already started typing a query for beats everything else
 
 
 # --------------------------------------------------------------------------- #
@@ -50,7 +64,11 @@ VERSION = "0.2.0"
 
 
 def build_items(config: Config) -> list:
-    """All the Items: first the commands from the configuration, then one "Run X" per installed app."""
+    """The STATIC items (they do not depend on what you typed): commands, "prefix" hints, apps.
+
+    kind="prefix" items are words that need more text after them ("yt", "kill"). Selecting one and
+    pressing Enter (or Tab) writes the word and a space in the search box.
+    """
     items = []
     for command in config.commands:
         items.append(
@@ -63,20 +81,106 @@ def build_items(config: Config) -> list:
                 confirm=command.confirm,
             )
         )
+    items.append(
+        Item(
+            id=f"prefix:{config.kill_word}",
+            title=f"Close an app ({config.kill_word} <name>)",
+            kind="prefix",
+            action="prefix_hint",
+            keywords=(config.kill_word,),
+            complete=f"{config.kill_word} ",
+        )
+    )
+    for link in config.quicklinks:
+        items.append(
+            Item(
+                id=f"link:{link.keyword}",
+                title=f"Search {link.title} ({link.keyword} <text>)",
+                kind="prefix",
+                action="prefix_hint",
+                keywords=(link.keyword,),
+                complete=f"{link.keyword} ",
+            )
+        )
     for name, path in find_apps(config.app_folders, config.app_exclude):
         items.append(Item(id=f"app:{name}", title=f"Run {name}", kind="app", action="open_app", target=str(path)))
     return items
 
 
-def _search(config: Config, query: str, limit: int | None = None) -> list:
-    """items -> ranked matches for `query`, using the search settings of the configuration."""
-    return rank(
-        build_items(config),
-        query,
-        limit=config.max_results if limit is None else limit,
-        ignore_accents=config.ignore_accents,
-        fuzzy=config.fuzzy,
-    )
+def build_snippet_items(config: Config) -> list:
+    """One item per Espanso trigger (see myexpander.py). The trigger is the title (that is what you
+    search), and the text goes in `subtitle` (shown, not searched) and `target` (what gets copied)."""
+    if not config.expander_enabled:
+        return []
+    scan = load_snippets(config.expander_folder, config.expander_strip_cursor)
+    return [
+        Item(
+            id=f"snip:{snippet.trigger}",
+            title=snippet.trigger,
+            kind="snippet",
+            action="copy_snippet",
+            target=snippet.text,
+            keywords=(snippet.label,) if snippet.label else (),
+            complete=snippet.trigger,
+            subtitle=preview(snippet.text),
+        )
+        for snippet in scan.snippets
+    ]
+
+
+def _bonus(config: Config):
+    """Item -> extra points for the items you use most (see myhistory.py). None when history is off."""
+    if not config.usage_enabled:
+        return None
+    counts = History(config.usage_file, True).counts()
+    return lambda item: min(counts.get(item.id, 0) * config.usage_boost_per_use, config.usage_max_boost)
+
+
+def _search(config: Config, query: str, limit: int | None = None, runner=default_runner) -> list:
+    """items -> ranked matches for `query`.
+
+    Three situations, decided by the FIRST word you typed:
+      * "yt lofi"   the first word is a quicklink keyword and there is a space: ONE result, the web search.
+      * "kill gh"   the first word is the kill word: the RUNNING apps, filtered by what follows.
+      * anything else: the normal search over commands, hints and apps.
+    """
+    limit = config.max_results if limit is None else limit
+    options = dict(ignore_accents=config.ignore_accents, fuzzy=config.fuzzy, bonus=_bonus(config))
+    parts = split_prefix(query)
+    word, rest = parts if parts else ("", "")
+
+    if parts:
+        for link in config.quicklinks:
+            if word == link.keyword:
+                title = f"Search {link.title} for {rest}" if rest else f"Search {link.title}: type what to look for"
+                item = Item(
+                    id=f"link:{link.keyword}",
+                    title=title,
+                    kind="quicklink",
+                    action="open_url",
+                    target=build_url(link, rest),
+                    complete=f"{link.keyword} {rest}" if rest else f"{link.keyword} ",
+                )
+                return [Match(item, SCORE_MODE)]
+
+    if query.strip().lower() == config.kill_word or (parts and word == config.kill_word):
+        apps = running_apps(runner, config.kill_protected)
+        # Rank on the bare names, then give each result its final title: otherwise the word "Kill"
+        # in every title would match whatever you type after "kill".
+        named = [Item(id=f"kill:{a.name}", title=a.name, kind="kill", action="kill_app", target=a.path) for a in apps]
+        matches = rank(named, rest, limit, **options)
+        return [
+            Match(
+                dataclasses.replace(m.item, title=f"Kill {m.item.title}", complete=f"{config.kill_word} {m.item.title.lower()}"),
+                m.score,
+            )
+            for m in matches
+        ]
+
+    items = build_items(config)
+    if query.strip():  # snippets can be many: they appear only when you type something
+        items += build_snippet_items(config)
+    return rank(items, query, limit, **options)
 
 
 def _print_json(data) -> None:
@@ -89,7 +193,7 @@ def _print_json(data) -> None:
 
 
 def cmd_list(args, config: Config, **_) -> int:
-    items = build_items(config)
+    items = build_items(config) + build_snippet_items(config)
     if args.json:
         _print_json([item.to_dict() for item in items])
         return 0
@@ -100,9 +204,9 @@ def cmd_list(args, config: Config, **_) -> int:
     return 0
 
 
-def cmd_search(args, config: Config, **_) -> int:
+def cmd_search(args, config: Config, runner=default_runner, **_) -> int:
     query = " ".join(args.query)
-    matches = _search(config, query, args.limit)
+    matches = _search(config, query, args.limit, runner)
     completion = complete(query, matches, config.ignore_accents)
     if args.json:
         _print_json({"query": query, "completion": completion, "results": [m.to_dict() for m in matches]})
@@ -117,9 +221,9 @@ def cmd_search(args, config: Config, **_) -> int:
     return 0
 
 
-def cmd_complete(args, config: Config, **_) -> int:
+def cmd_complete(args, config: Config, runner=default_runner, **_) -> int:
     query = " ".join(args.query)
-    completion = complete(query, _search(config, query), config.ignore_accents)
+    completion = complete(query, _search(config, query, runner=runner), config.ignore_accents)
     if args.json:
         _print_json({"query": query, "completion": completion})
     else:
@@ -127,21 +231,23 @@ def cmd_complete(args, config: Config, **_) -> int:
     return 0
 
 
-def cmd_run(args, config: Config, runner=default_runner, ask=input, **_) -> int:
-    items = build_items(config)
+def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.sleep, **_) -> int:
+    typed = args.text if args.text is not None else " ".join(args.query)
 
     # 1. Which item? An exact --id, or the best match for the words given (what Enter does).
     if args.id:
-        item = next((i for i in items if i.id == args.id), None)
+        # Dynamic items (a quicklink with its query, a running app to kill) only exist for the text
+        # that produced them, so we search with --text first, then fall back to the static items.
+        candidates = [m.item for m in _search(config, typed, limit=1000, runner=runner)] + build_items(config) + build_snippet_items(config)
+        item = next((i for i in candidates if i.id == args.id), None)
         if item is None:
             return _fail(args, f"no item with id {args.id!r} (see: list)")
     else:
-        query = " ".join(args.query)
-        if not query:
+        if not typed.strip():
             return _fail(args, "say what to run, for example:  run obsidian   (or use --id)", code=2)
-        matches = _search(config, query, limit=1)
+        matches = _search(config, typed, limit=1, runner=runner)
         if not matches:
-            return _fail(args, f"no match for {query!r}")
+            return _fail(args, f"no match for {typed!r}")
         item = matches[0].item
 
     # 2. Dangerous things ask first (unless --yes, or it is only a dry run).
@@ -157,12 +263,45 @@ def cmd_run(args, config: Config, runner=default_runner, ask=input, **_) -> int:
             return 1
 
     # 3. Do it.
-    result = run_item(item, runner=runner, dry_run=args.dry_run)
+    options = RunOptions(
+        force=args.force,
+        grace=config.kill_grace_seconds,
+        auto_force=config.kill_auto_force,
+        sleep=sleep,
+        notify=config.expander_notify,
+    )
+    result = run_item(item, runner=runner, dry_run=args.dry_run, options=options)
+
+    # 4. Remember it (for "most used first"), but only real, successful runs of real items.
+    if result.ok and not args.dry_run and item.kind != "prefix":
+        History(config.usage_file, config.usage_enabled).record(item.id)
+
     if args.json:
         _print_json({"item": item.to_dict(), "result": result.to_dict()})
     else:
         print(f"{item.title}: {result.message}")
     return 0 if result.ok else 1
+
+
+def cmd_history(args, config: Config, **_) -> int:
+    history = History(config.usage_file, True)
+    if args.clear:
+        history.clear()
+        print(f"forgotten: {config.usage_file}")
+        return 0
+    titles = {i.id: i.title for i in build_items(config)}
+    rows = history.top(args.limit)
+    if args.json:
+        _print_json([{"id": i, "count": n, "title": titles.get(i, i)} for i, n in rows])
+        return 0
+    if not config.usage_enabled:
+        print("history is switched off (usage.enabled in the configuration)")
+    if not rows:
+        print(f"nothing yet ({config.usage_file})")
+        return 0
+    for item_id, count in rows:
+        print(f"{count:>5}  {titles.get(item_id, item_id)}")
+    return 0
 
 
 def _fail(args, message: str, code: int = 1) -> int:
@@ -201,8 +340,41 @@ def cmd_doctor(args, config: Config | None = None, config_error: str = "", **_) 
         apps = find_apps(config.app_folders, config.app_exclude)
         results.append(("✔" if apps else "!", f"{len(apps)} application(s) found"))
         results.append(("✔", f"{len(config.commands)} command(s): " + ", ".join(c.id for c in config.commands)))
+        exists = config.quicklinks_path.is_file()
+        results.append(
+            ("✔" if exists else "!", f"quicklinks: {len(config.quicklinks)} in {config.quicklinks_path}" + ("" if exists else " (file not found: no quicklinks)"))
+        )
+        if config.usage_enabled:
+            counts = History(config.usage_file, True).counts()
+            results.append(("✔", f"usage history on: {len(counts)} item(s) remembered in {config.usage_file}"))
+        else:
+            results.append(("✔", "usage history is switched off"))
+        if config.expander_enabled:
+            scan = load_snippets(config.expander_folder, config.expander_strip_cursor)
+            if scan.missing_yaml:
+                results.append(("!", "snippets: PyYAML is not installed (.venv/bin/pip install pyyaml), so Espanso snippets are off"))
+            elif not config.expander_folder.is_dir():
+                results.append(("!", f"snippets: folder {config.expander_folder} does not exist"))
+            else:
+                extra = []
+                if scan.skipped:
+                    extra.append(f"{scan.skipped} entr{'y' if scan.skipped == 1 else 'ies'} skipped (variables, forms or regex: need Espanso itself)")
+                if scan.duplicates:
+                    extra.append(f"{scan.duplicates} duplicate trigger(s) ignored")
+                results.append(("✔", f"snippets: {len(scan.snippets)} trigger(s) from {scan.files} file(s) in {config.expander_folder}" + "".join(f"; {e}" for e in extra)))
+                for problem in scan.problems:
+                    results.append(("!", f"snippets: {problem}"))
+        else:
+            results.append(("✔", "snippets: not configured (set expander.folder to your Espanso folder)"))
+        policy = "force quit automatically" if config.kill_auto_force else "asks before force quit"
+        results.append(("✔", f"kill: '{config.kill_word} <name>' waits {config.kill_grace_seconds} s, then {policy}"))
 
-    for program, why in (("open", "opens applications"), ("osascript", "shuts the Mac down")):
+    root = Path(__file__).resolve().parent.parent
+    for relative in ("cli/ml", "app/mylauncher-app", "app/mylauncher-autostart"):
+        script = root / relative
+        if script.exists() and not os.access(script, os.X_OK):
+            results.append(("!", f"{relative} is not executable (no problem with `bash {relative}`); to fix: chmod a+x {relative}"))
+    for program, why in (("open", "opens applications and web pages"), ("osascript", "shuts the Mac down, asks apps to quit"), ("ps", "lists running apps (kill)")):
         found = shutil.which(program)
         results.append(("✔" if found else "!", f"'{program}' {why}: " + (found or "not found (normal if this is not a Mac)")))
 
@@ -245,15 +417,22 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--id", help="run exactly this item, e.g. app:Obsidian or cmd:shutdown")
     p.add_argument("--dry-run", action="store_true", help="show what would happen, do nothing")
     p.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    p.add_argument("--text", help="what was typed in the search box (needed with --id for quicklinks and kill)")
+    p.add_argument("--force", action="store_true", help="(kill) force quit now, without asking the app to quit")
     p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("history", parents=[common], help="what you use most")
+    p.add_argument("--clear", action="store_true", help="forget everything")
+    p.add_argument("--limit", type=int, default=20)
+    p.set_defaults(func=cmd_history)
 
     sub.add_parser("config", parents=[common], help="where the settings are and what they say").set_defaults(func=cmd_config)
     sub.add_parser("doctor", parents=[common], help="check the installation").set_defaults(func=cmd_doctor)
     return parser
 
 
-def main(argv=None, runner=default_runner, ask=input) -> int:
-    """Entry point. `runner` and `ask` can be replaced in tests (so no real command runs, nobody is asked)."""
+def main(argv=None, runner=default_runner, ask=input, sleep=time.sleep) -> int:
+    """Entry point. `runner`, `ask` and `sleep` can be replaced in tests (no real command, nobody asked, no waiting)."""
     args = make_parser().parse_args(argv)
     config, config_error = None, ""
     try:
@@ -262,7 +441,7 @@ def main(argv=None, runner=default_runner, ask=input) -> int:
         config_error = str(exc)
     if config is None and args.command != "doctor":  # doctor reports the problem itself
         return _fail(args, config_error, code=2)
-    return args.func(args, config=config, config_error=config_error, runner=runner, ask=ask)
+    return args.func(args, config=config, config_error=config_error, runner=runner, ask=ask, sleep=sleep)
 
 
 if __name__ == "__main__":

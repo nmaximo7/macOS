@@ -28,7 +28,7 @@ class CliCase(support.TempDirCase):
 
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            code = M.main([*args, "--config", self.config], runner=runner or self.runner, ask=ask)
+            code = M.main([*args, "--config", self.config], runner=runner or self.runner, ask=ask, sleep=lambda seconds: None)
         return code, out.getvalue(), err.getvalue()
 
 
@@ -39,12 +39,12 @@ class Listing(CliCase):
         self.assertEqual(code, 0)
         self.assertEqual(ids[0], "cmd:shutdown")
         self.assertIn("app:Obsidian", ids)
-        self.assertEqual(len(ids), 5)
+        self.assertEqual(len(ids), 6)  # shutdown, the kill hint, 4 apps
 
     def test_list_text(self):
         code, out, _ = self.call("list")
         self.assertIn("Run Obsidian", out)
-        self.assertIn("5 item(s)", out)
+        self.assertIn("6 item(s)", out)
 
 
 class Searching(CliCase):
@@ -200,6 +200,24 @@ class Doctor(CliCase):
         code, out, _ = self.call("doctor")
         self.assertEqual(code, 0)
         self.assertIn("does not exist", out)
+
+
+class ExecutableBits(CliCase):
+    def test_doctor_mentions_wrappers_that_lost_their_executable_bit(self):
+        import os
+
+        wrapper = support.ROOT / "app" / "mylauncher-autostart"
+        before = wrapper.stat().st_mode
+        try:
+            os.chmod(wrapper, 0o644)
+            _, out, _ = self.call("doctor")
+            self.assertIn("app/mylauncher-autostart is not executable", out)
+            self.assertIn("chmod a+x app/mylauncher-autostart", out)
+            self.assertEqual(self.call("doctor")[0], 0)  # a warning, not an error
+            os.chmod(wrapper, before | 0o111)
+            self.assertNotIn("not executable", self.call("doctor")[1])
+        finally:
+            os.chmod(wrapper, before)
 
 
 class RealProject(unittest.TestCase):

@@ -1,0 +1,15 @@
+[
+  {
+    "keyword": "jttp",
+    "url": "https://justtothepoint.com/search/?query=",
+    "title": "JustToThePoint"
+  },
+  {
+    "keyword": "google",
+    "url": "https://www.google.com/search?q={query}"
+  },
+  {
+    "keyword": "yt",
+    "url": "https://www.youtube.com/results?search_query={query}"
+  }
+]

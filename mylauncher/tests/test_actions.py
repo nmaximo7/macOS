@@ -66,6 +66,52 @@ class Shutdown(unittest.TestCase):
         self.assertEqual(runner.calls, [])
 
 
+class DefaultRunner(unittest.TestCase):
+    """default_runner really starts a program: here the harmless `cat`, which prints what it receives."""
+
+    def test_input_is_sent_as_utf_8_and_lang_is_set_for_the_command(self):
+        import shutil
+
+        from myactions import default_runner
+
+        if not shutil.which("env") or not shutil.which("cat"):
+            self.skipTest("needs env and cat")
+        done = default_runner(["cat"], input_text="línea ñ 😀\n")
+        self.assertEqual((done.returncode, done.stdout), (0, "línea ñ 😀\n"))
+        # LANG is forced to UTF-8 when we send text (pbcopy needs it when macOS starts us at login)
+        done = default_runner(["env"], input_text="")
+        self.assertIn("LANG=en_US.UTF-8", done.stdout)
+
+    def test_without_input_the_environment_is_left_alone(self):
+        import os
+        import shutil
+
+        from myactions import default_runner
+
+        if not shutil.which("env"):
+            self.skipTest("needs env")
+        done = default_runner(["env"])
+        self.assertEqual("LANG=en_US.UTF-8" in done.stdout, os.environ.get("LANG") == "en_US.UTF-8")
+
+
+class OpenUrl(unittest.TestCase):
+    def item(self, url):
+        return Item("link:x", "Search x", "quicklink", "open_url", target=url)
+
+    def test_opens_web_addresses(self):
+        runner = support.FakeRunner()
+        self.assertTrue(run_item(self.item("https://a.test/?q=1"), runner=runner).ok)
+        self.assertEqual(runner.calls, [["open", "https://a.test/?q=1"]])
+
+    def test_refuses_anything_that_is_not_http(self):
+        for url in ("file:///etc/passwd", "javascript:alert(1)", "/Applications/Safari.app", "ftp://x.test", ""):
+            runner = support.FakeRunner()
+            with self.subTest(url=url):
+                result = run_item(self.item(url), runner=runner)
+                self.assertFalse(result.ok)
+                self.assertEqual(runner.calls, [])
+
+
 class Registry(unittest.TestCase):
     def test_unknown_action(self):
         result = run_item(Item("x", "X", "command", "explode"), runner=support.FakeRunner())
@@ -76,6 +122,8 @@ class Registry(unittest.TestCase):
         # If you add a function to ACTIONS but forget COMMAND_ACTIONS (or the reverse), this test tells you.
         self.assertIn("open_app", ACTIONS)
         for name in COMMAND_ACTIONS:
+            self.assertIn(name, ACTIONS)
+        for name in ("open_url", "kill_app", "prefix_hint"):
             self.assertIn(name, ACTIONS)
 
 

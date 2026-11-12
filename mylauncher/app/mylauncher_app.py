@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from myconfig import ConfigError, find_config_path, load_config  # noqa: E402
 from myengine import Engine  # noqa: E402
+from mymenubar import MenuBar  # noqa: E402
 from myhotkey import HotkeyListener, describe, permission_report, watch_keys  # noqa: E402
 
 POLL_MS = 100  # how often the main thread looks at the queue
@@ -106,14 +107,29 @@ def run(config, config_path, show: bool) -> int:
     except RuntimeError as exc:
         print(f"warning: no hotkey ({exc}); use --show", file=sys.stderr)
 
+    bar = None
+    if config.menubar_enabled:
+        # The menu bar icon talks to the main loop through the same queue as the hotkey.
+        bar = MenuBar(config.menubar_title, messages.put, hide_dock=config.menubar_hide_dock)
+        try:
+            bar.start()
+            print(f"menu bar icon: {config.menubar_title}", flush=True)
+        except Exception as exc:  # noqa: BLE001 - a missing icon must never stop the launcher
+            print(f"warning: no menu bar icon ({exc})", file=sys.stderr, flush=True)
+            bar = None
+
     def poll() -> None:
         while True:
             try:
-                messages.get_nowait()
+                message = messages.get_nowait()
             except queue.Empty:
                 break
+            if message == "quit":
+                print("quit chosen in the menu bar", flush=True)
+                root.quit()
+                return
             window.toggle()
-            print(f"hotkey received: window {'shown' if window.visible else 'hidden'}")  # proof that each step worked
+            print(f"{message} received: window {'shown' if window.visible else 'hidden'}", flush=True)  # proof that each step worked
         root.after(POLL_MS, poll)
 
     if show:
@@ -126,6 +142,8 @@ def run(config, config_path, show: bool) -> int:
         pass
     finally:
         listener.stop()
+        if bar is not None:
+            bar.stop()
     return 0
 
 

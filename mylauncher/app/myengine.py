@@ -18,10 +18,20 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 CLI_SCRIPT = Path(__file__).resolve().parent.parent / "cli" / "mylauncher.py"
 TIMEOUT = 15  # seconds; a launcher that hangs is worse than one that says "error"
+
+
+@dataclass(frozen=True)
+class RunResult:
+    """What came back from `run`: did it work, a sentence, and "needs_force" (an app did not quit: ask the user)."""
+
+    ok: bool
+    message: str
+    needs_force: bool = False
 
 
 class EngineError(Exception):
@@ -61,9 +71,19 @@ class Engine:
             raise EngineError(data["error"])
         return data
 
-    def run(self, item_id: str) -> tuple:
-        """Do an item. Returns (ok, message). The window has already asked for confirmation, hence --yes."""
-        data = self._call("run", "--id", item_id, "--yes")
+    def run(self, item_id: str, text: str = "", force: bool = False) -> RunResult:
+        """Do an item. The window has already asked for confirmation, hence --yes.
+
+        `text` is what was typed in the search box: quicklinks and kill need it, because "the YouTube search
+        for lofi" and "the running Ghostty" only exist for that text. `force` = force quit (see kill).
+        """
+        rest = ["--id", item_id, "--yes"]
+        if text:
+            rest.append(f"--text={text}")  # "--text=value" in ONE piece: text starting with "-" is safe
+        if force:
+            rest.append("--force")
+        data = self._call("run", *rest)
         if "error" in data:
-            return False, data["error"]
-        return data["result"]["ok"], data["result"]["message"]
+            return RunResult(False, data["error"])
+        result = data["result"]
+        return RunResult(result["ok"], result["message"], result.get("needs_force", False))

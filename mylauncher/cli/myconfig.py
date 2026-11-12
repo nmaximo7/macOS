@@ -19,17 +19,15 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from myactions import COMMAND_ACTIONS
+from myquicklinks import load_quicklinks
+from mytypes import ConfigError  # defined in mytypes.py; imported here so "from myconfig import ConfigError" keeps working
 
 ENV_VAR = "MYLAUNCHER_CONF"
 VALID_MODIFIERS = ("command", "shift", "control", "option")
-
-
-class ConfigError(Exception):
-    """The configuration file is missing or wrong. The message says what to fix."""
 
 
 @dataclass(frozen=True)
@@ -63,6 +61,23 @@ class Config:
     autostart_label: str = "com.mylauncher.app"  # name of the launchd agent (and of its .plist file)
     autostart_log_dir: Path = Path("~/Library/Logs/mylauncher").expanduser()  # where the app writes its log
     autostart_keep_alive: bool = True  # launchd restarts the app if it crashes
+    quicklinks_path: Path = Path("quicklinks.json")  # the web searches file (relative paths: next to this file)
+    quicklinks: tuple = ()  # tuple of Quicklink, read from that file by load_config
+    usage_enabled: bool = True  # remember how often each item is used
+    usage_file: Path = Path("~/Library/Application Support/mylauncher/usage.json").expanduser()
+    usage_boost_per_use: int = 2  # score points per use...
+    usage_max_boost: int = 10  # ...but never more than this (must stay below 20: a better match always wins)
+    kill_word: str = "kill"  # the word that starts the "close an app" mode
+    kill_grace_seconds: int = 5  # how long to wait for an app to quit by itself
+    kill_auto_force: bool = False  # True: force quit without asking when it did not quit
+    kill_protected: tuple = ("python",)  # app names (lower case) that kill never lists
+    menubar_enabled: bool = True  # show the icon in the menu bar
+    menubar_title: str = "⌘"  # the text (or emoji) of that icon
+    menubar_hide_dock: bool = False  # True: no Dock icon, menu bar only
+    expander_enabled: bool = False  # True when expander.folder is set (and expander.enabled is not false)
+    expander_folder: Path = Path("")  # where the Espanso .yml files are (searched in all subfolders)
+    expander_strip_cursor: bool = True  # remove Espanso's cursor marker $|$ from the copied text
+    expander_notify: bool = True  # show a macOS notification when a snippet is copied
 
 
 # --------------------------------------------------------------------------- #
@@ -95,7 +110,10 @@ def load_config(path: Path) -> Config:
     except json.JSONDecodeError as exc:
         # JSON is strict: no comments, no trailing commas. The line number helps a lot.
         raise ConfigError(f"{path} is not valid JSON (line {exc.lineno}, column {exc.colno}): {exc.msg}") from None
-    return parse_config(data, path)
+    config = parse_config(data, path)
+    # The quicklinks live in their own file (conf/quicklinks.json); the keyword of the "kill" mode is reserved.
+    links = load_quicklinks(config.quicklinks_path, reserved=(config.kill_word,))
+    return replace(config, quicklinks=links)
 
 
 # --------------------------------------------------------------------------- #
@@ -200,6 +218,47 @@ def parse_config(data, path: Path) -> Config:
     log_dir = Path(_check(autostart.get("log_dir", "~/Library/Logs/mylauncher"), str, "autostart.log_dir")).expanduser()
     keep_alive = _check(autostart.get("keep_alive", True), bool, "autostart.keep_alive")
 
+    # ---- quicklinks, usage, kill, menubar (all optional: every value has a default) --
+    quick = data.get("quicklinks", {})
+    _check(quick, dict, "quicklinks")
+    quick_file = Path(_check(quick.get("file", "quicklinks.json"), str, "quicklinks.file")).expanduser()
+    if not quick_file.is_absolute():
+        quick_file = Path(path).parent / quick_file  # relative: next to myconfiguration.json
+
+    usage = data.get("usage", {})
+    _check(usage, dict, "usage")
+    usage_enabled = _check(usage.get("enabled", True), bool, "usage.enabled")
+    usage_file = Path(_check(usage.get("file", "~/Library/Application Support/mylauncher/usage.json"), str, "usage.file")).expanduser()
+    boost = _check(usage.get("boost_per_use", 2), int, "usage.boost_per_use")
+    max_boost = _check(usage.get("max_boost", 10), int, "usage.max_boost")
+    if boost < 0 or not 0 <= max_boost < 20:
+        raise ConfigError("usage.boost_per_use must be 0 or more and usage.max_boost between 0 and 19 (a better match must always win)")
+
+    kill = data.get("kill", {})
+    _check(kill, dict, "kill")
+    kill_word = _check(kill.get("word", "kill"), str, "kill.word").lower()
+    if not kill_word or len(kill_word.split()) != 1:
+        raise ConfigError('kill.word must be ONE word, for example "kill"')
+    grace = _check(kill.get("grace_seconds", 5), int, "kill.grace_seconds")
+    if grace < 0:
+        raise ConfigError("kill.grace_seconds cannot be negative")
+    auto_force = _check(kill.get("auto_force", False), bool, "kill.auto_force")
+    protected = tuple(name.lower() for name in _text_list(kill.get("protected", ["python"]), "kill.protected"))
+
+    menubar = data.get("menubar", {})
+    _check(menubar, dict, "menubar")
+    menubar_enabled = _check(menubar.get("enabled", True), bool, "menubar.enabled")
+    menubar_title = _check(menubar.get("title", "⌘"), str, "menubar.title")
+    menubar_hide_dock = _check(menubar.get("hide_dock_icon", False), bool, "menubar.hide_dock_icon")
+
+    expander = data.get("expander", {})
+    _check(expander, dict, "expander")
+    folder_text = _check(expander.get("folder", ""), str, "expander.folder")
+    expander_folder = Path(folder_text).expanduser() if folder_text.strip() else Path("")
+    expander_enabled = _check(expander.get("enabled", True), bool, "expander.enabled") and bool(folder_text.strip())
+    strip_cursor = _check(expander.get("strip_cursor_marker", True), bool, "expander.strip_cursor_marker")
+    notify = _check(expander.get("notification", True), bool, "expander.notification")
+
     return Config(
         path=Path(path),
         hotkey_modifiers=modifiers,
@@ -217,4 +276,20 @@ def parse_config(data, path: Path) -> Config:
         autostart_label=label,
         autostart_log_dir=log_dir,
         autostart_keep_alive=keep_alive,
+        quicklinks_path=quick_file,
+        usage_enabled=usage_enabled,
+        usage_file=usage_file,
+        usage_boost_per_use=boost,
+        usage_max_boost=max_boost,
+        kill_word=kill_word,
+        kill_grace_seconds=grace,
+        kill_auto_force=auto_force,
+        kill_protected=protected,
+        menubar_enabled=menubar_enabled,
+        menubar_title=menubar_title,
+        menubar_hide_dock=menubar_hide_dock,
+        expander_enabled=expander_enabled,
+        expander_folder=expander_folder,
+        expander_strip_cursor=strip_cursor,
+        expander_notify=notify,
     )

@@ -6,7 +6,8 @@ What the keys do:
     typing        new suggestions (lowercase or UPPERCASE, it is the same)
     Up / Down     move the selection (wraps around)
     Tab           autocomplete: writes the first suggestion in the text box
-    Enter         do the selected item (Shutdown asks "are you sure?" first)
+    Enter         do the selected item (Shutdown asks "are you sure?" first). On a hint such as
+                  "yt" or "kill" Enter does what Tab does: writes "yt " and waits for your text.
     Escape        hide the window
 
 Rules of this file:
@@ -118,7 +119,8 @@ class LauncherWindow:
     def _draw_list(self) -> None:
         self.listbox.delete(0, "end")
         for result in self.state.results:
-            self.listbox.insert("end", result["title"])
+            extra = result.get("subtitle", "")  # e.g. the text of a snippet
+            self.listbox.insert("end", f"{result['title']}   {extra}" if extra else result["title"])
         self._draw_selection()
 
     def _draw_selection(self) -> None:
@@ -143,11 +145,20 @@ class LauncherWindow:
         item = self.state.current
         if item is None:
             return "break"
+        if item["kind"] == "prefix":  # a hint ("yt", "kill"): there is nothing to run yet, so write it and wait
+            self.text.set(item["complete"])
+            self.entry.icursor("end")
+            return "break"
         if item["confirm"] and not self.confirm(self.config.window_title, f"{item['title']}: are you sure?", parent=self.root):
             return "break"
-        ok, message = self.engine.run(item["id"])
-        if ok:
+        typed = self.text.get()
+        result = self.engine.run(item["id"], typed)
+        if result.needs_force:  # an app did not quit: only force quit if the user agrees
+            question = f"{result.message}\n\nForce quit now?"
+            if self.confirm(self.config.window_title, question, parent=self.root):
+                result = self.engine.run(item["id"], typed, force=True)
+        if result.ok:
             self.hide()
         else:
-            self.status.config(text=f"error: {message}")
+            self.status.config(text=f"error: {result.message}")
         return "break"

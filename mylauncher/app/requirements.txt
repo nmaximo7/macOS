@@ -1,1 +1,3 @@
 pynput>=1.7
+pyobjc-framework-Cocoa
+PyYAML>=6

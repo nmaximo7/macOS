@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 
 import support  # noqa: F401  (puts cli/ and app/ on the import path)
-from myengine import Engine, EngineError
+from myengine import Engine, EngineError, RunResult
 from myhotkey import HotkeyListener, HotkeyMatcher, describe, normalise, permission_report, watch_keys
 from mystate import LauncherState
 
@@ -98,11 +98,19 @@ class EngineClient(unittest.TestCase):
 
     def test_run_always_passes_yes_and_id(self):
         process = FakeProcess(json.dumps({"item": {}, "result": {"ok": True, "message": "done"}}))
-        self.assertEqual(self.engine(process).run("app:Safari"), (True, "done"))
+        self.assertEqual(self.engine(process).run("app:Safari"), RunResult(True, "done", False))
         self.assertEqual(process.calls[0], ["PY", "SCRIPT", "run", "--json", "--id", "app:Safari", "--yes"])
 
-    def test_run_failure_messages(self):
-        self.assertEqual(self.engine(FakeProcess(json.dumps({"error": "no item"}))).run("x"), (False, "no item"))
+    def test_run_passes_the_typed_text_and_force(self):
+        process = FakeProcess(json.dumps({"item": {}, "result": {"ok": True, "message": "done"}}))
+        self.engine(process).run("link:yt", "yt -lofi", force=True)
+        # "--text=..." is ONE argument, so text that starts with "-" cannot be mistaken for an option.
+        self.assertEqual(process.calls[0][3:], ["--json", "--id", "link:yt", "--yes", "--text=yt -lofi", "--force"])
+
+    def test_run_failure_and_needs_force(self):
+        self.assertEqual(self.engine(FakeProcess(json.dumps({"error": "no item"}))).run("x"), RunResult(False, "no item"))
+        answer = {"item": {}, "result": {"ok": False, "message": "frozen", "needs_force": True}}
+        self.assertEqual(self.engine(FakeProcess(json.dumps(answer))).run("kill:X", "kill x"), RunResult(False, "frozen", True))
 
 
 class Key:

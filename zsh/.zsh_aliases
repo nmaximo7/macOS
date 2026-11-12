@@ -96,5 +96,6 @@ fi
 #       HostName yourIpServer
 #       User yourUser
 #       Port 2222
-
-alias ml="$HOME/macOS/mylauncher/cli/ml"
+alias ml="bash $HOME/macOS/mylauncher/cli/ml"
+alias mlapp="bash $HOME/macOS/mylauncher/app/mylauncher-app"
+alias mlauto="bash $HOME/macOS/mylauncher/app/mylauncher-autostart"

@@ -66,15 +66,31 @@ def score_text(query: str, text: str, fuzzy: bool = True) -> int:
     return 0
 
 
-def rank(items, query: str, limit: int | None = None, ignore_accents: bool = True, fuzzy: bool = True) -> list:
-    """The best matches for `query`, best first. Returns a list of Match."""
+def split_prefix(text: str):
+    """"yt lofi beats" -> ("yt", "lofi beats");  "yt " -> ("yt", "");  "yt" or "" -> None.
+
+    This is how the launcher notices "keyword, space, query": the FIRST word and everything after it.
+    A text without a space has no prefix (the user is still typing the first word).
+    """
+    word, space, rest = text.lstrip().partition(" ")
+    if not space:
+        return None
+    return word.lower(), rest.strip()
+
+
+def rank(items, query: str, limit: int | None = None, ignore_accents: bool = True, fuzzy: bool = True, bonus=None) -> list:
+    """The best matches for `query`, best first. Returns a list of Match.
+
+    `bonus` (optional) is a function Item -> extra points, used for "most used first" (see myhistory.py).
+    It is only added to items that DO match, and it is kept below 20 so it can only reorder equal matches.
+    """
     wanted = normalize(query, ignore_accents)
     matches = []
     for item in items:
         texts = [item.title, *item.keywords]
         best = max(score_text(wanted, normalize(t, ignore_accents), fuzzy) for t in texts)
         if best > 0:
-            matches.append(Match(item, best))
+            matches.append(Match(item, best + (bonus(item) if bonus else 0)))
     # Sort: higher score first; on a tie, commands before apps; then alphabetical.
     matches.sort(key=lambda m: (-m.score, m.item.kind != "command", normalize(m.item.title, ignore_accents)))
     return matches if limit is None else matches[:limit]
@@ -83,9 +99,11 @@ def rank(items, query: str, limit: int | None = None, ignore_accents: bool = Tru
 def complete(query: str, matches, ignore_accents: bool = True) -> str:
     """The text the search box should show when the user presses Tab (autocomplete).
 
-    It is the title of the best match, in lower case: "obs" -> "run obsidian".
+    It is the `complete` text of the best match when it has one ("yt " for the YouTube quicklink,
+    "kill ghostty" for a running app), otherwise its title in lower case: "obs" -> "run obsidian".
     With no match, the text is left as it was.
     """
     if not matches:
         return query
-    return normalize(matches[0].item.title, ignore_accents)
+    best = matches[0].item
+    return best.complete or normalize(best.title, ignore_accents)

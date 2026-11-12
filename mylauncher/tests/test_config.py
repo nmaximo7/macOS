@@ -17,12 +17,32 @@ class RealFile(unittest.TestCase):
         self.assertEqual([c.id for c in config.commands], ["shutdown"])
         self.assertTrue(config.commands[0].confirm)
 
+    def test_the_shipped_quicklinks_are_loaded_with_the_configuration(self):
+        config = load_config(support.REAL_CONFIG)
+        self.assertEqual([l.keyword for l in config.quicklinks], ["jttp", "google", "yt"])
+
     def test_tilde_is_expanded(self):
         config = load_config(support.REAL_CONFIG)
         self.assertTrue(all("~" not in str(f) for f in config.app_folders))
 
 
 class Reading(support.TempDirCase):
+    def test_quicklinks_file_next_to_the_configuration_is_read(self):
+        self.write_quicklinks([{"keyword": "x", "url": "https://x.test/?q={query}"}])
+        config = load_config(self.write_config(support.good_config()))
+        self.assertEqual([l.keyword for l in config.quicklinks], ["x"])
+
+    def test_a_wrong_quicklinks_file_is_a_configuration_error(self):
+        self.write_quicklinks([{"keyword": "x"}])
+        with self.assertRaises(ConfigError):
+            load_config(self.write_config(support.good_config()))
+
+    def test_a_quicklink_cannot_use_the_kill_word(self):
+        self.write_quicklinks([{"keyword": "kill", "url": "https://x.test"}])
+        with self.assertRaises(ConfigError) as ctx:
+            load_config(self.write_config(support.good_config()))
+        self.assertIn("reserved", str(ctx.exception))
+
     def test_missing_file(self):
         with self.assertRaises(ConfigError) as ctx:
             load_config(self.tmp / "nope.json")
@@ -111,6 +131,64 @@ class Checking(unittest.TestCase):
         self.assertBad(support.good_config(window={"width": 0}), "window.width")
         self.assertBad(support.good_config(window={"top_offset": -5}), "window.top_offset")
         self.assertBad(support.good_config(window=[]), "window")
+
+    def test_new_sections_have_defaults(self):
+        c = parse_config(support.good_config(), Path("/conf/myconfiguration.json"))
+        self.assertEqual(c.quicklinks_path, Path("/conf/quicklinks.json"))  # relative: next to the configuration file
+        self.assertEqual((c.kill_word, c.kill_grace_seconds, c.kill_auto_force, c.kill_protected), ("kill", 5, False, ("python",)))
+        self.assertEqual((c.menubar_enabled, c.menubar_title, c.menubar_hide_dock), (True, "⌘", False))
+        self.assertEqual((c.usage_boost_per_use, c.usage_max_boost), (2, 10))
+
+    def test_quicklinks_file_setting(self):
+        c = parse_config(support.good_config(quicklinks={"file": "/abs/links.json"}), Path("/conf/c.json"))
+        self.assertEqual(c.quicklinks_path, Path("/abs/links.json"))
+        c = parse_config(support.good_config(quicklinks={"file": "sub/l.json"}), Path("/conf/c.json"))
+        self.assertEqual(c.quicklinks_path, Path("/conf/sub/l.json"))
+        self.assertBad(support.good_config(quicklinks={"file": 3}), "quicklinks.file")
+
+    def test_usage_checks(self):
+        self.assertBad(support.good_config(usage={"max_boost": 20}), "max_boost", "better match")
+        self.assertBad(support.good_config(usage={"max_boost": -1}), "max_boost")
+        self.assertBad(support.good_config(usage={"boost_per_use": -1}), "boost_per_use")
+        self.assertBad(support.good_config(usage={"enabled": "yes"}), "usage.enabled")
+        self.assertBad(support.good_config(usage=[]), "usage")
+
+    def test_kill_checks(self):
+        self.assertBad(support.good_config(kill={"word": "two words"}), "kill.word")
+        self.assertBad(support.good_config(kill={"word": ""}), "kill.word")
+        self.assertBad(support.good_config(kill={"grace_seconds": -1}), "grace_seconds")
+        self.assertBad(support.good_config(kill={"auto_force": 1}), "kill.auto_force")
+        c = parse_config(support.good_config(kill={"word": "QUIT", "protected": ["Python", "Finder"]}), Path("x"))
+        self.assertEqual((c.kill_word, c.kill_protected), ("quit", ("python", "finder")))
+
+    def test_menubar_checks(self):
+        self.assertBad(support.good_config(menubar={"enabled": "yes"}), "menubar.enabled")
+        self.assertBad(support.good_config(menubar={"title": 5}), "menubar.title")
+        self.assertBad(support.good_config(menubar={"hide_dock_icon": "no"}), "menubar.hide_dock_icon")
+
+    def test_expander_is_off_unless_a_folder_is_given(self):
+        c = parse_config(support.good_config(), Path("x"))
+        self.assertFalse(c.expander_enabled)
+        c = parse_config(support.good_config(expander={"folder": "  "}), Path("x"))
+        self.assertFalse(c.expander_enabled)
+        c = parse_config(support.good_config(expander={"folder": "~/Espanso"}), Path("x"))
+        self.assertTrue(c.expander_enabled)
+        self.assertNotIn("~", str(c.expander_folder))
+        self.assertEqual((c.expander_strip_cursor, c.expander_notify), (True, True))
+        c = parse_config(support.good_config(expander={"folder": "/e", "enabled": False}), Path("x"))
+        self.assertFalse(c.expander_enabled)
+
+    def test_expander_checks(self):
+        self.assertBad(support.good_config(expander={"folder": 3}), "expander.folder")
+        self.assertBad(support.good_config(expander={"folder": "/e", "enabled": "yes"}), "expander.enabled")
+        self.assertBad(support.good_config(expander={"folder": "/e", "notification": 1}), "expander.notification")
+        self.assertBad(support.good_config(expander={"folder": "/e", "strip_cursor_marker": "no"}), "expander.strip_cursor_marker")
+        self.assertBad(support.good_config(expander=[]), "expander")
+
+    def test_the_shipped_configuration_points_at_the_espanso_folder(self):
+        c = load_config(support.REAL_CONFIG)
+        self.assertTrue(c.expander_enabled)
+        self.assertTrue(str(c.expander_folder).endswith("macOS/Espanso/Library/Application Support"))
 
     def test_exclude_is_lower_cased(self):
         data = support.good_config(apps={"folders": [], "exclude": ["Boot Camp Assistant"]})
