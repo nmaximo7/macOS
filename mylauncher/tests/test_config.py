@@ -13,7 +13,7 @@ class RealFile(unittest.TestCase):
         config = load_config(support.REAL_CONFIG)
         self.assertEqual(config.hotkey_modifiers, ("command",))
         self.assertEqual(config.hotkey_key, "d")
-        self.assertEqual((config.window_width, config.window_font_size), (640, 20))
+        self.assertEqual((config.window_width, config.window_font_size), (680, 20))
         self.assertEqual([c.id for c in config.commands], ["shutdown"])
         self.assertTrue(config.commands[0].confirm)
 

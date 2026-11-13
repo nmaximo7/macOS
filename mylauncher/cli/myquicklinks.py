@@ -14,6 +14,7 @@ The file is a list; each entry has two required fields and one optional:
            the END of the url (that is what you want for "...search/?query=").
            The text is URL-encoded for you: "lo fi" becomes "lo+fi".
   title    optional name shown in the list; by default the site name (youtube.com).
+  icon     optional emoji shown at the start of the row; default 🔎.
 
 How you use it:   yt   (then Space or Tab)   lofi beats   (then Enter)
 """
@@ -35,6 +36,7 @@ class Quicklink:
     keyword: str
     url: str
     title: str
+    icon: str = ""
 
 
 def site_name(url: str) -> str:
@@ -74,7 +76,10 @@ def parse_quicklinks(data, where: str = "quicklinks.json", reserved=()) -> tuple
         title = entry.get("title", "")
         if not isinstance(title, str):
             raise ConfigError(f"{here}.title must be text")
-        links.append(Quicklink(keyword, url, title.strip() or site_name(url)))
+        icon = entry.get("icon", "")
+        if not isinstance(icon, str):
+            raise ConfigError(f"{here}.icon must be text (one emoji)")
+        links.append(Quicklink(keyword, url, title.strip() or site_name(url), icon.strip()))
     return tuple(links)
 
 

@@ -1,13 +1,27 @@
 {
   "hotkey": {
     "modifiers": ["command"],
-    "key": "d"
+    "key": "d",
+    "swallow": true
   },
   "window": {
     "title": "mylauncher",
-    "width": 640,
+    "width": 680,
     "font_size": 20,
-    "top_offset": 160
+    "top_offset": 160,
+    "style": "borderless",
+    "font": "Helvetica Neue",
+    "colors": {
+      "background": "#1c1c1f",
+      "input_background": "#26262b",
+      "text": "#f5f5f7",
+      "muted": "#8e8e93",
+      "selection": "#34343c",
+      "command": "#ff9f0a"
+    }
+  },
+  "browser": {
+    "command": ["/Applications/Zen.app/Contents/MacOS/zen", "-new-tab", "{url}"]
   },
   "autostart": {
     "label": "com.mylauncher.app",
@@ -18,9 +32,17 @@
     "enabled": true,
     "folder": "~/macOS/Espanso/Library/Application Support",
     "strip_cursor_marker": true,
-    "notification": true
+    "notification": true,
+    "group_length": 2,
+    "groups": {
+      ";p": { "name": "prompts", "icon": "🧠" },
+      ";e": { "name": "emoji", "icon": "😀" },
+      ";b": { "name": "bookmarks", "icon": "🔖" },
+      ";h": { "name": "code", "icon": "💻" }
+    }
   },
   "apps": {
+    "word": "run",
     "folders": [
       "/Applications",
       "/System/Applications",
@@ -31,6 +53,7 @@
   },
   "search": {
     "max_results": 8,
+    "max_browse_results": 100,
     "ignore_accents": true,
     "fuzzy": true
   },
@@ -40,7 +63,9 @@
       "title": "Shutdown",
       "action": "shutdown",
       "keywords": ["shut down", "power off", "turn off"],
-      "confirm": true
+      "confirm": true,
+      "icon": "🔌",
+      "description": "Turn the Mac off (asks first)"
     }
   ]
 }

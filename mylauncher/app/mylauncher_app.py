@@ -72,12 +72,14 @@ def hotkey_test(config) -> int:
     """No window: just prove that the permission and the key combination work."""
     print_permissions()
     name = describe(config.hotkey_modifiers, config.hotkey_key)
-    listener = HotkeyListener(config.hotkey_modifiers, config.hotkey_key, lambda: print(f"hotkey {name} pressed"))
+    listener = HotkeyListener(config.hotkey_modifiers, config.hotkey_key, lambda: print(f"hotkey {name} pressed"), swallow=config.hotkey_swallow)
     try:
         listener.start()
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    if config.hotkey_swallow:
+        print(f"swallowing: {'yes, the application in front will NOT receive the keys' if listener.swallowing else 'NO (this pynput does not support darwin_intercept: pip install -U pynput)'}")
     print(f"Press {name} in any application. Nothing printed? See 'Permissions' in docs/01-installation.md. Ctrl+C to stop.")
     try:
         listener._listener.join()
@@ -101,11 +103,13 @@ def run(config, config_path, show: bool) -> int:
     window = LauncherWindow(root, Engine(config_path=config_path), config)
 
     messages: queue.Queue = queue.Queue()
-    listener = HotkeyListener(config.hotkey_modifiers, config.hotkey_key, lambda: messages.put("toggle"))
+    listener = HotkeyListener(config.hotkey_modifiers, config.hotkey_key, lambda: messages.put("toggle"), swallow=config.hotkey_swallow)
     try:
         listener.start()
     except RuntimeError as exc:
         print(f"warning: no hotkey ({exc}); use --show", file=sys.stderr)
+    else:
+        print(f"hotkey swallowing: {'on' if listener.swallowing else 'off'}", flush=True)
 
     bar = None
     if config.menubar_enabled:

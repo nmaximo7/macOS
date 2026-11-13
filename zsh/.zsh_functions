@@ -1,41 +1,39 @@
-# =============================================================================
 # ~/.zsh_functions  (stow package: zsh/.zsh_functions)
 # A function is a small program living in your shell. Unlike an alias it can take arguments
 # anywhere ("$1", "$@"), use variables and make decisions.
 # =============================================================================
 
-# HUGO_CONTENT: the Markdown files of my website. This is the folder that Syncthing keeps in step
-# with the Arch server where Hugo runs. Every function below (and the Python toolkit's HUGO_ROOT)
-# must point here, so it is defined ONCE. Override it before this file loads if it ever moves.
+# =============================================================================
+# 📁 ENVIRONMENT SETUP
+# =============================================================================
+
+# HUGO_CONTENT: The primary directory for your website's Markdown files. 
+# Every other script and tool relies on this environment variable so you only 
+# have to change it in one place if your directory structure moves.
+# This is the folder that Syncthing keeps in step with the Arch server where Hugo runs.
 export HUGO_CONTENT="${HUGO_CONTENT:-/Volumes/MacDatosMaster/justtothepoint/content}"
 
-# mkcd <dir>: create a folder (and parents) and go into it.
+
+# =============================================================================
+# 📂 DIRECTORY AND FILE UTILITIES
+# =============================================================================
+
+# mkcd <dir>
+# What it does: Creates a directory (including any missing parent directories) 
+# and instantly `cd`s into it. 📁
+# Arguments: Requires one argument (the directory name).
 mkcd() {
     [[ -n $1 ]] || { echo "usage: mkcd <dir>"; return 1; }
     mkdir -p -- "$1" && cd -- "$1"
 }
 
-# calc "3*4"  ->  12      (bc -l = math library, decimals work: calc "10/3")
-calc() { bc -l <<< "$*" }
-alias calc='noglob calc'     # noglob: `calc 3*4` also works without quotes
-
-# urlencode "hello world"  ->  hello+world
-urlencode() {
-    python3 -c 'import sys, urllib.parse as u; print(u.quote_plus(" ".join(sys.argv[1:])))' "$@"
-}
-
-# myripgrep <pattern>: search inside my Hugo content folder.
-myripgrep() { rg "$@" "$HUGO_CONTENT/" }
-
-# mysearch <pattern>: same search, and open the same words in Google
-# (macOS: `open`, there is no xdg-open).
-mysearch() {
-    rg "$@" "$HUGO_CONTENT/"
-    open "https://www.google.com/search?q=$(urlencode "$*")"
-}
-
-# searchEdit: fuzzy-find a config/script file with a preview, then open it in $EDITOR.
-# Handles spaces in names (-print0 / --read0 / xargs -0) and skips folders that do not exist.
+# searchEdit
+# What it does: A fuzzy-finder for your configuration and script files. It searches 
+# specific directories (~/.config, $DOTFILES, ~/.local/bin, ~/Dropbox), ignores 
+# .git folders, and pipes the results into `fzf` with a live code preview powered 
+# by `bat`. When you select a file, it opens it in your default $EDITOR. 🔍
+# Safety: Checks if the directories actually exist before trying to search them.
+# Handles spaces in names (-print0 / --read0 / xargs -0).
 searchEdit() {
     local -a dirs existing
     local d
@@ -47,53 +45,51 @@ searchEdit() {
         | xargs -0 -o ${=EDITOR}
 }
 
-# ytmp3 <url>: download the audio of a video as mp3 into ~/Music.
-# youtube-dl is unmaintained, yt-dlp replaces it (brew install yt-dlp ffmpeg).
-# -P sets the download folder, so your shell stays where it is (the old version did cd).
-ytmp3() {
-    (( $+commands[yt-dlp] )) || { echo "brew install yt-dlp ffmpeg"; return 1; }
-    yt-dlp --extract-audio --audio-format mp3 -P "$HOME/Music" -o '%(title)s.%(ext)s' "$@"
+
+# =============================================================================
+# 🧮 MATH AND CONVERSIONS
+# =============================================================================
+
+# calc "<expression>"
+# What it does: A quick command-line calculator powered by the `bc` math library. 
+# Since it uses `-l`, it properly handles decimals (e.g., calc "10/3"). 🧮
+calc() { bc -l <<< "$*" }
+
+# Alias mapping: `noglob` means `calc 3*4` also works without needing quotes.
+alias calc='noglob calc'
+
+# urlencode "<string>"
+# What it does: Takes a raw string and encodes it into a URL-safe format using a 
+# quick inline Python 3 script. Spaces become `+`, and special characters are escaped. 🔗
+# Example: urlencode "hello world"  ->  hello+world
+urlencode() {
+    python3 -c 'import sys, urllib.parse as u; print(u.quote_plus(" ".join(sys.argv[1:])))' "$@"
 }
 
-# playmp3: play all mp3 files in ~/Music in random order (brew install mpv). Quit with q.
-playmp3() {
-    (( $+commands[mpv] )) || { echo "brew install mpv"; return 1; }
-    mpv --no-video --shuffle "$HOME"/Music/*.mp3
+
+# =============================================================================
+# 🔎 HUGO CONTENT SEARCH
+# =============================================================================
+
+# myripgrep <pattern>
+# What it does: Searches specifically inside your $HUGO_CONTENT directory 
+# for a text pattern using `rg` (ripgrep). 🔎
+myripgrep() { rg "$@" "$HUGO_CONTENT/" }
+
+# mysearch <pattern>
+# What it does: Runs `myripgrep` to find the term in your local Hugo files, 
+# AND simultaneously opens your default web browser to run a Google search 
+# for that exact term (using your `urlencode` function). 🌐
+mysearch() {
+    rg "$@" "$HUGO_CONTENT/"
+    open "https://www.google.com/search?q=$(urlencode "$*")"
 }
 
-# free: memory summary (macOS has no `free`). Useful to check before loading a big model.
-free() {
-    top -l 1 -s 0 | grep PhysMem
-    memory_pressure | grep 'free percentage'
-}
-
-# killport <port>: stop whatever is listening on that port (a dev server that did not exit).
-killport() {
-    [[ -n $1 ]] || { echo "usage: killport <port>"; return 1; }
-    local pids
-    pids=$(lsof -ti tcp:"$1" -sTCP:LISTEN) || { echo "nothing is listening on port $1"; return 1; }
-    echo "killing PID(s): ${pids//$'\n'/ }"
-    echo "$pids" | xargs kill
-}
-
-# weather [city]: one-line weather from wttr.in
-weather() { curl -s "wttr.in/${1:-}?format=3" }
-
-# Archives: the Oh My Zsh `extract` plugin gives you `extract <file>` and `x <file>`.
-
-# ---
-# hugo-image-posts - Find which Hugo posts reference a given image file.
-#
-# Pass an image filename (or full path) and it prints the list of .md files
-# in your Hugo content directory that reference that image. It uses
-# ${1:t} so you can pass a full path and it still matches on the basename.
-#
-# Usage:
-#   hugo-image-posts hero.png
-#   hugo-image-posts /some/path/hero.png
-#
-# Requires: ripgrep (rg)
-# hugo-image-posts hero.png - Find which Hugo posts reference a given image file.
+# hugo-image-posts <image-file>
+# What it does: Finds every Hugo Markdown post that references a specific image. 
+# It uses ripgrep to scan all .md files in $HUGO_CONTENT. 🖼️
+# Smart feature: You can pass just the filename (hero.png) or the full path 
+# (/some/path/hero.png). The ${1:t} modifier extracts just the base filename.
 hugo-image-posts() {
   local content="$HUGO_CONTENT"
   local image="${1:t}"  # Use the filename even if you pass a full path
@@ -111,39 +107,72 @@ hugo-image-posts() {
   rg -F -l --sort path --hidden --no-ignore -g '*.md' -- "$image" "$content"
 }
 
-# 👋 Daily Briefing in my Python project.
-# Runs in a SUBSHELL ( ... ): the cd and the activated virtualenv disappear when it ends, so
-# your prompt stays where it was. The venv's python is called directly (no `activate` needed).
-greetings() {
-  local proj="$HOME/macOS/myPython"
-  [[ -x "$proj/.venv/bin/python" ]] || { print -u2 "greetings: no virtualenv in $proj (see ~/macOS/docs/docMymac/mypython.md, section 5)"; return 1; }
-  ( cd "$proj" && .venv/bin/python greetings.py "$@" )
+
+# =============================================================================
+# 🎵 MEDIA UTILITIES
+# =============================================================================
+
+# ytmp3 <url>
+# What it does: Downloads the audio from a YouTube video and saves it as an MP3 
+# directly into your ~/Music folder. 🎵
+# Dependencies: Requires `yt-dlp` and `ffmpeg` (brew install yt-dlp ffmpeg).
+# Smart feature: It checks if `yt-dlp` exists first. -P sets the download folder 
+# so your shell stays where it is.
+ytmp3() {
+    (( $+commands[yt-dlp] )) || { echo "brew install yt-dlp ffmpeg"; return 1; }
+    yt-dlp --extract-audio --audio-format mp3 -P "$HOME/Music" -o '%(title)s.%(ext)s' "$@"
 }
 
-# 🚀 Start my webserver on a remote server Arch
-start_remote_webserver() {
-  ssh -t server -- zsh -lic 'webserver'
+# playmp3
+# What it does: Shuffles and plays all MP3 files located in your ~/Music folder 
+# directly in the terminal (no video window). Quit with 'q'. 🎧
+# Dependencies: Requires `mpv` (brew install mpv).
+playmp3() {
+    (( $+commands[mpv] )) || { echo "brew install mpv"; return 1; }
+    mpv --no-video --shuffle "$HOME"/Music/*.mp3
 }
 
-# 👩🏻‍💻 content_creation [page.md] [options]: check and improve a Hugo page.
-#   content_creation                      the page you edited LAST in $HUGO_CONTENT
-#   content_creation calculus/x.md        a given page
-#   content_creation --skip searx         without web research      (see: content_creation --help)
-# Same idea as greetings: a subshell, the venv python, and every argument passed on ("$@").
-# Why not `echo ... || return`? echo never fails, so the `||` can never run. A check that CAN
-# fail has to test something (here: that the project and its virtualenv exist).
-# The hints on what to do after an error are printed by the program itself, at the end of its summary.
-# 👩🏻‍💻 content_creation [page.md] [options]: check and improve a Hugo page.
-content_creation() {
-  local proj="$HOME/macOS/myPython"
-  [[ -x "$proj/.venv/bin/python" ]] || { print -u2 "content_creation: no virtualenv in $proj (see ~/macOS/docs/docMymac/mypython.md, section 5)"; return 1; }
-  ( cd "$proj" && .venv/bin/python content_creation.py "$@" )
+
+# =============================================================================
+# ⚙️ SYSTEM AND PROCESSES
+# =============================================================================
+
+# Archives note: the Oh My Zsh `extract` plugin gives you `extract <file>` and `x <file>`.
+
+# free
+# What it does: Simulates the Linux `free` command on macOS. Prints a quick summary 
+# of physical memory and your current memory pressure percentage. 📊
+# Useful to check before loading a big local AI model.
+free() {
+    top -l 1 -s 0 | grep PhysMem
+    memory_pressure | grep 'free percentage'
 }
 
-# Shut down the Mac, forcibly closing Ghostty if necessary.
-# Usage:
-#   shutdownmac          # confirm first
-#   shutdownmac --now    # no confirmation
+# killport <port>
+# What it does: Finds whatever process is listening on the specified TCP port 
+# and forcibly kills it. Extremely useful for zombie dev servers. 💀
+# Arguments: Requires the port number.
+killport() {
+    [[ -n $1 ]] || { echo "usage: killport <port>"; return 1; }
+    local pids
+    pids=$(lsof -ti tcp:"$1" -sTCP:LISTEN) || { echo "nothing is listening on port $1"; return 1; }
+    echo "killing PID(s): ${pids//$'\n'/ }"
+    echo "$pids" | xargs kill
+}
+
+# weather [city]
+# What it does: Prints a one-line ASCII weather summary for the given city 
+# using wttr.in. If no city is provided, it attempts to guess based on your IP. ☔
+weather() { curl -s "wttr.in/${1:-}?format=3" }
+
+# shutdownmac [--now]
+# What it does: A comprehensive shutdown sequence for your entire setup. 🛑
+# 1. Sends a shutdown command to your remote Arch server via SSH.
+# 2. Sends a shutdown command to a Windows machine (192.168.1.12).
+# 3. Asks for confirmation (unless you pass `--now`).
+# 4. Gracefully tells the `Ghostty` terminal to quit using AppleScript.
+# 5. If Ghostty refuses to close after 2 seconds, it force-kills it.
+# 6. Finally, tells macOS System Events to shut down the Mac.
 shutdownmac() {
   ssh -t server 'sudo shutdown -h now'
   ssh nmaxi@192.168.1.12 "shutdown /s /t 0"
@@ -167,4 +196,40 @@ shutdownmac() {
 
   # Request a normal macOS shutdown.
   osascript -e 'tell application "System Events" to shut down'
+}
+
+
+# =============================================================================
+# 🐍 PYTHON PROJECT WRAPPERS & REMOTE EXECUTION
+# =============================================================================
+
+# greetings
+# What it does: Runs your `greetings.py` daily briefing script. 👋
+# Note: Runs in a SUBSHELL ( ... ): the cd and the activated virtualenv disappear 
+# when it ends, so your prompt stays where it was. The venv's python is called 
+# directly (no `activate` needed).
+greetings() {
+  local proj="$HOME/macOS/myPython"
+  [[ -x "$proj/.venv/bin/python" ]] || { print -u2 "greetings: no virtualenv in $proj (see ~/macOS/docs/docMymac/mypython.md, section 5)"; return 1; }
+  ( cd "$proj" && .venv/bin/python greetings.py "$@" )
+}
+
+# content_creation [page.md] [options]
+# What it does: Runs your `content_creation.py` script to check and improve a Hugo page. 👩🏻‍💻
+# Usage:
+#   content_creation                     (the page you edited LAST in $HUGO_CONTENT)
+#   content_creation calculus/x.md       (a given page)
+#   content_creation --skip searx        (without web research)
+# Note: Like `greetings`, runs in a subshell using the local venv python.
+content_creation() {
+  local proj="$HOME/macOS/myPython"
+  [[ -x "$proj/.venv/bin/python" ]] || { print -u2 "content_creation: no virtualenv in $proj (see ~/macOS/docs/docMymac/mypython.md, section 5)"; return 1; }
+  ( cd "$proj" && .venv/bin/python content_creation.py "$@" )
+}
+
+# start_remote_webserver
+# What it does: SSHs into your Arch server and interactively runs the 
+# `webserver` command under zsh. 🚀
+start_remote_webserver() {
+  ssh -t server -- zsh -lic 'webserver'
 }

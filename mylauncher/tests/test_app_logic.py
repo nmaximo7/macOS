@@ -232,6 +232,92 @@ class Hotkey(unittest.TestCase):
         self.assertIn("pip install pynput", str(ctx.exception))
 
 
+class Swallow(unittest.TestCase):
+    """The hotkey is taken away from the application in front (so Ghostty does not split/open a tab)."""
+
+    def setUp(self):
+        self.fired = []
+        self.events = {"down_d": ({"command"}, "d", False), "repeat_d": ({"command"}, "d", True), "up_d": ({"command"}, "d", False),
+                       "down_shift_d": ({"command", "shift"}, "d", False), "down_x": ({"command"}, "x", False), "plain_d": (set(), "d", False)}
+        self.listener = HotkeyListener(("command",), "d", lambda: self.fired.append(1), swallow=True, reader=lambda event: self.events[event])
+
+    def test_the_hotkey_is_swallowed_and_fires_once(self):
+        self.assertIsNone(self.listener.intercept(10, "down_d"))
+        self.assertEqual(self.fired, [1])
+
+    def test_autorepeat_is_swallowed_but_does_not_fire_again(self):
+        self.listener.intercept(10, "down_d")
+        self.assertIsNone(self.listener.intercept(10, "repeat_d"))
+        self.assertEqual(self.fired, [1])
+
+    def test_key_up_of_a_swallowed_key_is_swallowed_and_rearms(self):
+        self.listener.intercept(10, "down_d")
+        self.assertIsNone(self.listener.intercept(11, "up_d"))
+        self.listener.intercept(10, "down_d")
+        self.assertEqual(self.fired, [1, 1])
+
+    def test_other_keys_pass_through(self):
+        for event in ("down_shift_d", "down_x", "plain_d"):  # other modifiers, other key, no modifier
+            with self.subTest(event=event):
+                self.assertEqual(self.listener.intercept(10, event), event)
+        self.assertEqual(self.listener.intercept(11, "plain_d"), "plain_d")  # an unrelated key-up
+        self.assertEqual(self.listener.intercept(12, "down_d"), "down_d")  # modifier-change events are never touched
+        self.assertEqual(self.fired, [])
+
+    def test_a_bug_in_the_reader_lets_the_event_through(self):
+        def boom(event):
+            raise ValueError("x")
+
+        listener = HotkeyListener(("command",), "d", lambda: None, swallow=True, reader=boom)
+        self.assertEqual(listener.intercept(10, "e"), "e")
+
+    def test_pynput_callbacks_and_intercept_do_not_double_fire(self):
+        self.listener.matcher.press(CMD)
+        self.listener.intercept(10, "down_d")
+        self.listener.matcher.press(D)  # in case pynput reports the same press as well
+        self.assertEqual(self.fired, [1])
+
+    def test_start_passes_darwin_intercept_and_reports_it(self):
+        seen = {}
+
+        class FakeListener:
+            def __init__(self, **kwargs):
+                seen.update(kwargs)
+
+            def start(self):
+                pass
+
+        self.listener._factory = FakeListener
+        self.listener.start()
+        self.assertEqual(seen["darwin_intercept"], self.listener.intercept)
+        self.assertTrue(self.listener.swallowing)
+
+    def test_old_pynput_without_darwin_intercept_still_works(self):
+        class OldListener:
+            def __init__(self, on_press, on_release):
+                pass
+
+            def start(self):
+                pass
+
+        self.listener._factory = OldListener
+        self.listener.start()
+        self.assertFalse(self.listener.swallowing)
+
+    def test_without_swallow_nothing_is_passed(self):
+        seen = {}
+
+        class FakeListener:
+            def __init__(self, **kwargs):
+                seen.update(kwargs)
+
+            def start(self):
+                pass
+
+        HotkeyListener(("command",), "d", lambda: None, factory=FakeListener).start()
+        self.assertNotIn("darwin_intercept", seen)
+
+
 class Diagnostics(unittest.TestCase):
     def test_not_a_mac_reports_nothing(self):
         self.assertEqual(permission_report(platform="linux"), [])
@@ -269,3 +355,159 @@ class Diagnostics(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Scrolling(unittest.TestCase):
+    def state(self, count, rows=3):
+        state = LauncherState(rows=rows)
+        state.set_answer({"results": [{"id": str(i)} for i in range(count)], "mode": "run", "highlight": 3})
+        return state
+
+    def test_mode_and_highlight_come_from_the_answer(self):
+        state = self.state(1)
+        self.assertEqual((state.mode, state.highlight), ("run", 3))
+        state.clear()
+        self.assertEqual((state.mode, state.highlight), ("normal", 0))
+
+    def test_only_the_rows_that_fit_are_visible(self):
+        state = self.state(10)
+        self.assertEqual([r["id"] for r in state.visible], ["0", "1", "2"])
+
+    def test_moving_down_scrolls_the_least_possible(self):
+        state = self.state(10)
+        for _ in range(3):
+            state.move(+1)
+        self.assertEqual((state.selected, state.top, state.visible_selected), (3, 1, 2))
+
+    def test_moving_up_scrolls_back(self):
+        state = self.state(10)
+        for _ in range(4):
+            state.move(+1)
+        for _ in range(4):
+            state.move(-1)
+        self.assertEqual((state.selected, state.top), (0, 0))
+
+    def test_wrapping_around_scrolls_to_the_end_and_to_the_start(self):
+        state = self.state(10)
+        state.move(-1)  # from the first to the last
+        self.assertEqual((state.selected, state.top), (9, 7))
+        state.move(+1)
+        self.assertEqual((state.selected, state.top), (0, 0))
+
+    def test_clicking_a_visible_row(self):
+        state = self.state(10)
+        state.move(+1), state.move(+1), state.move(+1)
+        state.select_visible(0)
+        self.assertEqual(state.current["id"], "1")
+        state.select_visible(99)  # outside: ignored
+        self.assertEqual(state.current["id"], "1")
+
+
+class Theme(unittest.TestCase):
+    def test_shorten(self):
+        from mytheme import shorten
+
+        self.assertEqual(shorten("short", 10), "short")
+        self.assertEqual(shorten("a  long\ntext here", 8), "a long…")
+        self.assertEqual(shorten("anything", 1), "")
+        self.assertEqual(shorten("", 5), "")
+
+    def test_row_texts_give_the_subtitle_the_room_that_is_left(self):
+        from mytheme import row_texts
+
+        icon, title, subtitle, badge = row_texts({"icon": "🚀", "title": "Run X", "subtitle": "z" * 100, "badge": "Application"}, 40)
+        self.assertEqual((icon, title, badge), ("🚀", "Run X", "Application"))
+        self.assertEqual(len(subtitle), 40 - 5 - 11 - 6)
+        self.assertTrue(subtitle.endswith("…"))
+
+    def test_mode_labels(self):
+        from mytheme import mode_label
+
+        self.assertEqual(mode_label("kill"), "💀 Close an app")
+        self.assertEqual(mode_label("normal"), "")
+
+
+class Chrome(unittest.TestCase):
+    """mychrome.apply_style with a pretend AppKit: we check WHAT it asks Cocoa to do."""
+
+    class Button:
+        def __init__(self):
+            self.hidden = False
+
+        def setHidden_(self, value):
+            self.hidden = value
+
+    class Window:
+        def __init__(self, title, buttons):
+            self._title, self.buttons, self.calls = title, buttons, []
+
+        def title(self):
+            return self._title
+
+        def standardWindowButton_(self, which):
+            return self.buttons[which]
+
+        def __getattr__(self, name):
+            if name.startswith("set"):
+                return lambda value: self.calls.append((name, value))
+            raise AttributeError(name)
+
+    def appkit(self, windows):
+        class NSColor:
+            @staticmethod
+            def colorWithSRGBRed_green_blue_alpha_(r, g, b, a):
+                return ("color", round(r, 2), round(g, 2), round(b, 2), a)
+
+        class NSApp:
+            @staticmethod
+            def windows():
+                return windows
+
+        return type("FakeAppKit", (), {"NSApp": NSApp, "NSColor": NSColor})
+
+    def test_hides_the_three_buttons_and_the_title(self):
+        from mychrome import apply_style
+
+        buttons = [self.Button() for _ in range(3)]
+        window = self.Window("mylauncher", buttons)
+        other = self.Window("other", [self.Button() for _ in range(3)])
+        logged = []
+        self.assertTrue(apply_style("mylauncher", "#1c1c1f", self.appkit([other, window]), logged.append))
+        self.assertTrue(all(b.hidden for b in buttons))
+        self.assertFalse(any(b.hidden for b in other.buttons))  # only OUR window
+        names = dict(window.calls)
+        self.assertEqual(names["setTitleVisibility_"], 1)
+        self.assertTrue(names["setTitlebarAppearsTransparent_"])
+        self.assertTrue(names["setMovableByWindowBackground_"])
+        self.assertEqual(names["setBackgroundColor_"][0], "color")
+        self.assertEqual(logged, [])
+
+    def test_no_such_window_or_a_failure_keeps_the_normal_window(self):
+        from mychrome import apply_style
+
+        logged = []
+        self.assertFalse(apply_style("mylauncher", "#000000", self.appkit([]), logged.append))
+        self.assertIn("no window called", logged[0])
+
+        class Broken(self.Window):
+            def setTitleVisibility_(self, value):
+                raise RuntimeError("objc error")
+
+        logged.clear()
+        self.assertFalse(apply_style("mylauncher", "#000000", self.appkit([Broken("mylauncher", [None] * 3)]), logged.append))
+        self.assertIn("objc error", logged[0])
+
+    def test_missing_pyobjc_is_explained(self):
+        import sys
+        from unittest import mock
+        from mychrome import apply_style
+
+        logged = []
+        with mock.patch.dict(sys.modules, {"AppKit": None}):
+            self.assertFalse(apply_style("x", "#000000", None, logged.append))
+        self.assertIn("pyobjc", logged[0])
+
+    def test_hex_to_rgb(self):
+        from mychrome import hex_to_rgb
+
+        self.assertEqual(hex_to_rgb("#ff0000"), (1.0, 0.0, 0.0))

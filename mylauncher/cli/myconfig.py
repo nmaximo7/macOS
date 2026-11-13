@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, replace
+import re
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from myactions import COMMAND_ACTIONS
@@ -27,6 +28,16 @@ from myquicklinks import load_quicklinks
 from mytypes import ConfigError  # defined in mytypes.py; imported here so "from myconfig import ConfigError" keeps working
 
 ENV_VAR = "MYLAUNCHER_CONF"
+# The colours of the window (any #rrggbb). The names are the only ones allowed in window.colors.
+DEFAULT_COLORS = {
+    "background": "#1c1c1f",  # the window
+    "input_background": "#26262b",  # the line where you type
+    "text": "#f5f5f7",  # titles
+    "muted": "#8e8e93",  # grey information (subtitles, labels)
+    "selection": "#34343c",  # the highlighted row
+    "command": "#ff9f0a",  # the word the launcher recognised (kill, yt, ;p ...)
+}
+HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 VALID_MODIFIERS = ("command", "shift", "control", "option")
 
 
@@ -39,6 +50,8 @@ class CommandDef:
     action: str
     keywords: tuple
     confirm: bool
+    icon: str = ""  # emoji shown in the list
+    description: str = ""  # grey text under/after the title
 
 
 @dataclass(frozen=True)
@@ -78,6 +91,15 @@ class Config:
     expander_folder: Path = Path("")  # where the Espanso .yml files are (searched in all subfolders)
     expander_strip_cursor: bool = True  # remove Espanso's cursor marker $|$ from the copied text
     expander_notify: bool = True  # show a macOS notification when a snippet is copied
+    expander_group_length: int = 2  # ";pclarify" belongs to the group ";p" (this many first characters)
+    expander_groups: dict = field(default_factory=dict)  # {";p": ("bookmark", "🔖")} names/icons of the groups
+    hotkey_swallow: bool = True  # True: the application in front does not receive the hotkey
+    run_word: str = "run"  # the word that lists all the applications
+    max_browse_results: int = 100  # how many rows "run", "kill" and ";" lists may have (the window scrolls)
+    window_font: str = "Helvetica Neue"
+    window_style: str = "borderless"  # "borderless": no title bar buttons; "standard": a normal window
+    window_colors: dict = field(default_factory=lambda: dict(DEFAULT_COLORS))
+    browser_command: tuple = ()  # how to open a web address, with {url}; empty = the macOS default (open)
 
 
 # --------------------------------------------------------------------------- #
@@ -112,7 +134,7 @@ def load_config(path: Path) -> Config:
         raise ConfigError(f"{path} is not valid JSON (line {exc.lineno}, column {exc.colno}): {exc.msg}") from None
     config = parse_config(data, path)
     # The quicklinks live in their own file (conf/quicklinks.json); the keyword of the "kill" mode is reserved.
-    links = load_quicklinks(config.quicklinks_path, reserved=(config.kill_word,))
+    links = load_quicklinks(config.quicklinks_path, reserved=(config.kill_word, config.run_word))
     return replace(config, quicklinks=links)
 
 
@@ -162,8 +184,13 @@ def parse_config(data, path: Path) -> Config:
     if len(key) != 1:
         raise ConfigError('hotkey.key must be ONE character, for example "d"')
 
+    hotkey_swallow = _check(hotkey.get("swallow", True), bool, "hotkey.swallow")
+
     # ---- apps ---------------------------------------------------------------
     apps = _section(data, "apps")
+    run_word = _check(apps.get("word", "run"), str, "apps.word").lower()
+    if not run_word or len(run_word.split()) != 1:
+        raise ConfigError('apps.word must be ONE word, for example "run"')
     folders = tuple(Path(f).expanduser() for f in _text_list(apps.get("folders"), "apps.folders"))
     exclude = tuple(name.lower() for name in _text_list(apps.get("exclude", []), "apps.exclude"))
 
@@ -174,6 +201,9 @@ def parse_config(data, path: Path) -> Config:
         raise ConfigError('search.max_results must be at least 1')
     ignore_accents = _check(search.get("ignore_accents"), bool, "search.ignore_accents")
     fuzzy = _check(search.get("fuzzy"), bool, "search.fuzzy")
+    max_browse = _check(search.get("max_browse_results", 100), int, "search.max_browse_results")
+    if max_browse < 1:
+        raise ConfigError("search.max_browse_results must be at least 1")
 
     # ---- commands -----------------------------------------------------------
     raw_commands = _check(data.get("commands"), list, "commands")
@@ -195,6 +225,8 @@ def parse_config(data, path: Path) -> Config:
                 action=action,
                 keywords=_text_list(entry.get("keywords", []), f"{where}.keywords"),
                 confirm=_check(entry.get("confirm", False), bool, f"{where}.confirm"),
+                icon=_check(entry.get("icon", ""), str, f"{where}.icon").strip(),
+                description=_check(entry.get("description", ""), str, f"{where}.description").strip(),
             )
         )
 
@@ -208,6 +240,18 @@ def parse_config(data, path: Path) -> Config:
         if value < (0 if name == "top_offset" else 1):
             raise ConfigError(f"window.{name} is too small")
         sizes[name] = value
+    font = _check(window.get("font", "Helvetica Neue"), str, "window.font")
+    style = _check(window.get("style", "borderless"), str, "window.style")
+    if style not in ("borderless", "standard"):
+        raise ConfigError('window.style must be "borderless" or "standard"')
+    colors = dict(DEFAULT_COLORS)
+    given = _check(window.get("colors", {}), dict, "window.colors")
+    for name, value in given.items():
+        if name not in DEFAULT_COLORS:
+            raise ConfigError(f'window.colors.{name} is not a colour of the window; use: {", ".join(DEFAULT_COLORS)}')
+        if not isinstance(value, str) or not HEX_COLOR.match(value):
+            raise ConfigError(f'window.colors.{name} must look like "#ff9f0a" (a # and six hexadecimal digits)')
+        colors[name] = value
 
     # ---- autostart (optional: every value has a default) ---------------------
     autostart = data.get("autostart", {})
@@ -259,6 +303,28 @@ def parse_config(data, path: Path) -> Config:
     strip_cursor = _check(expander.get("strip_cursor_marker", True), bool, "expander.strip_cursor_marker")
     notify = _check(expander.get("notification", True), bool, "expander.notification")
 
+    group_length = _check(expander.get("group_length", 2), int, "expander.group_length")
+    if group_length < 2:
+        raise ConfigError("expander.group_length must be at least 2 (the prefix character and one letter)")
+    groups = {}
+    for prefix, value in _check(expander.get("groups", {}), dict, "expander.groups").items():
+        where = f"expander.groups[{prefix!r}]"
+        if not prefix.strip() or any(c.isspace() for c in prefix):
+            raise ConfigError(f"{where}: the group must be a trigger prefix without spaces, for example \";p\"")
+        if isinstance(value, str):
+            value = {"name": value}
+        _check(value, dict, where)
+        groups[prefix] = (_check(value.get("name", ""), str, f"{where}.name").strip(), _check(value.get("icon", ""), str, f"{where}.icon").strip())
+
+    browser = data.get("browser", {})
+    _check(browser, dict, "browser")
+    browser_command = tuple(_text_list(browser.get("command", []), "browser.command"))
+    if browser_command and not any("{url}" in part for part in browser_command):
+        raise ConfigError('browser.command must contain "{url}" where the web address goes')
+
+    if run_word == kill_word:
+        raise ConfigError("apps.word and kill.word must be different words")
+
     return Config(
         path=Path(path),
         hotkey_modifiers=modifiers,
@@ -292,4 +358,13 @@ def parse_config(data, path: Path) -> Config:
         expander_folder=expander_folder,
         expander_strip_cursor=strip_cursor,
         expander_notify=notify,
+        expander_group_length=group_length,
+        expander_groups=groups,
+        hotkey_swallow=hotkey_swallow,
+        run_word=run_word,
+        max_browse_results=max_browse,
+        window_font=font,
+        window_style=style,
+        window_colors=colors,
+        browser_command=browser_command,
     )

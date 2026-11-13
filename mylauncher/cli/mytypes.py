@@ -27,6 +27,11 @@ class ConfigError(Exception):
     """
 
 
+# What the window shows when an item does not choose its own emoji / label. One place to change them.
+DEFAULT_ICONS = {"app": "🚀", "command": "⚡", "prefix": "💡", "quicklink": "🔎", "kill": "💀", "snippet": "✂️"}
+KIND_LABELS = {"app": "Application", "command": "Command", "prefix": "Hint", "quicklink": "Quicklink", "kill": "Running app", "snippet": "Snippet"}
+
+
 @dataclass(frozen=True)
 class Item:
     """One thing the launcher can do."""
@@ -42,6 +47,8 @@ class Item:
     confirm: bool = False  # True = ask "are you sure?" before doing it
     complete: str = ""  # what Tab writes in the search box; empty = the title in lower case
     subtitle: str = ""  # grey extra text shown after the title (not searched), e.g. the text of a snippet
+    icon: str = ""  # an emoji shown at the start of the row; empty = the default for the kind (DEFAULT_ICONS)
+    badge: str = ""  # small label at the end of the row; empty = the default for the kind (KIND_LABELS)
 
     def to_dict(self) -> dict:
         """A plain dictionary, ready to be written as JSON (this is what the GUI will read)."""
@@ -55,6 +62,8 @@ class Item:
             "confirm": self.confirm,
             "complete": self.complete,
             "subtitle": self.subtitle,
+            "icon": self.icon or DEFAULT_ICONS.get(self.kind, ""),
+            "badge": self.badge or KIND_LABELS.get(self.kind, ""),
         }
 
 

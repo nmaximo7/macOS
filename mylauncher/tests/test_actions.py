@@ -3,7 +3,7 @@
 import unittest
 
 import support
-from myactions import ACTIONS, COMMAND_ACTIONS, run_item
+from myactions import ACTIONS, COMMAND_ACTIONS, RunOptions, run_item
 from mytypes import Item
 
 
@@ -110,6 +110,55 @@ class OpenUrl(unittest.TestCase):
                 result = run_item(self.item(url), runner=runner)
                 self.assertFalse(result.ok)
                 self.assertEqual(runner.calls, [])
+
+
+class OpenUrlInTab(unittest.TestCase):
+    URL = "https://a.test/?q=1"
+    ITEM = Item("link:x", "Search x", "quicklink", "open_url", target=URL)
+    BROWSER = ("/Applications/Zen.app/Contents/MacOS/zen", "-new-tab", "{url}")
+
+    def run_it(self, runner, dry_run=False):
+        return run_item(self.ITEM, runner=runner, dry_run=dry_run, options=RunOptions(browser_command=self.BROWSER))
+
+    def test_uses_the_browser_command_with_the_url_filled_in(self):
+        runner = support.FakeRunner()
+        result = self.run_it(runner)
+        self.assertTrue(result.ok)
+        self.assertEqual(runner.calls, [["/Applications/Zen.app/Contents/MacOS/zen", "-new-tab", self.URL]])
+        self.assertIn("new tab", result.message)
+
+    def test_falls_back_to_open_when_the_program_is_missing(self):
+        calls = []
+
+        def runner(command, input_text=None):
+            calls.append(command)
+            if command[0] != "open":
+                raise FileNotFoundError
+            return support.FakeRunner()(command)
+
+        result = self.run_it(runner)
+        self.assertTrue(result.ok)
+        self.assertEqual(calls[-1], ["open", self.URL])
+
+    def test_falls_back_to_open_when_the_command_fails(self):
+        results = iter([1, 0])
+
+        def runner(command, input_text=None):
+            return support.FakeRunner(returncode=next(results))(command)
+
+        self.assertTrue(self.run_it(runner).ok)
+
+    def test_dry_run_shows_the_browser_command_and_runs_nothing(self):
+        runner = support.FakeRunner()
+        result = self.run_it(runner, dry_run=True)
+        self.assertEqual(runner.calls, [])
+        self.assertIn("-new-tab", result.message)
+
+    def test_still_refuses_non_http(self):
+        runner = support.FakeRunner()
+        item = Item("x", "x", "quicklink", "open_url", target="file:///etc/passwd")
+        self.assertFalse(run_item(item, runner=runner, options=RunOptions(browser_command=self.BROWSER)).ok)
+        self.assertEqual(runner.calls, [])
 
 
 class Registry(unittest.TestCase):

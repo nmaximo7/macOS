@@ -60,9 +60,17 @@ class HotkeyMatcher:
         what, value = kind
         if what == "modifier":
             self.held.add(value)
-        elif value == self.key and self.armed and self.held == self.modifiers:
-            self.armed = False
-            self.callback()
+        elif value == self.key and self.held == self.modifiers:
+            self.trigger()
+
+    def trigger(self) -> bool:
+        """Call the callback once per physical key press (two sources may report the same press:
+        pynput's normal callbacks and the intercept below, so both come through here)."""
+        if not self.armed:
+            return False
+        self.armed = False
+        self.callback()
+        return True
 
     def release(self, raw_key) -> None:
         kind = normalise(raw_key)
@@ -75,11 +83,65 @@ class HotkeyMatcher:
             self.armed = True
 
 
+# Quartz event numbers and modifier masks (CGEventTypes.h): written as numbers so no import is needed here.
+KEY_DOWN, KEY_UP = 10, 11
+FLAG_MASKS = {"command": 0x100000, "shift": 0x20000, "option": 0x80000, "control": 0x40000}
+
+
+def quartz_reader(event):
+    """A Quartz keyboard event -> (set of modifiers, lower-case character, is_autorepeat).
+
+    Imported inside the function: Quartz exists only on a Mac (pynput itself installs it there).
+    """
+    import Quartz
+
+    flags = Quartz.CGEventGetFlags(event)
+    modifiers = {name for name, mask in FLAG_MASKS.items() if flags & mask}
+    _, text = Quartz.CGEventKeyboardGetUnicodeString(event, 10, None, None)
+    repeat = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventAutorepeat)
+    return modifiers, (text or "").lower(), bool(repeat)
+
+
 class HotkeyListener:
-    def __init__(self, modifiers, key, callback, factory=None):
+    """Starts pynput and feeds the HotkeyMatcher.
+
+    swallow=True: the hotkey is ALSO taken away from the application in front. Without it, Command+D
+    reaches Ghostty as well and Ghostty splits/opens a tab. pynput can do this with its
+    `darwin_intercept` argument: a function that sees every keyboard event before the applications
+    do, and returns None to throw one away. `self.swallowing` tells whether it worked.
+    """
+
+    def __init__(self, modifiers, key, callback, factory=None, swallow=False, reader=quartz_reader):
         self.matcher = HotkeyMatcher(modifiers, key, callback)  # callback runs in pynput's thread!
         self._factory = factory  # tests give a fake; normally None = the real pynput
         self._listener = None
+        self._swallow = swallow
+        self._reader = reader
+        self._swallowed_down = False  # we threw the key-down away, so we throw the matching key-up away too
+        self.swallowing = False
+
+    def intercept(self, event_type, event):
+        """pynput calls this for every key event. Return the event to let it through, None to swallow it.
+
+        Whatever goes wrong here, the event is let through: a bug must never take the keyboard away.
+        """
+        try:
+            if event_type not in (KEY_DOWN, KEY_UP):
+                return event
+            modifiers, char, repeat = self._reader(event)
+            is_ours = char == self.matcher.key and modifiers == self.matcher.modifiers
+            if event_type == KEY_DOWN and is_ours:
+                if not repeat:
+                    self.matcher.trigger()
+                self._swallowed_down = True
+                return None
+            if event_type == KEY_UP and char == self.matcher.key and self._swallowed_down:
+                self._swallowed_down = False
+                self.matcher.armed = True
+                return None
+        except Exception:  # noqa: BLE001
+            return event
+        return event
 
     def start(self) -> None:
         factory = self._factory
@@ -89,7 +151,15 @@ class HotkeyListener:
             except ImportError:
                 raise RuntimeError("pynput is not installed: run  pip install pynput  (see docs/01-installation.md)") from None
             factory = keyboard.Listener
-        self._listener = factory(on_press=self.matcher.press, on_release=self.matcher.release)
+        callbacks = dict(on_press=self.matcher.press, on_release=self.matcher.release)
+        if self._swallow:
+            try:
+                self._listener = factory(**callbacks, darwin_intercept=self.intercept)
+                self.swallowing = True
+            except TypeError:  # an old pynput that does not know darwin_intercept
+                self._listener = factory(**callbacks)
+        else:
+            self._listener = factory(**callbacks)
         self._listener.start()
 
     def stop(self) -> None:

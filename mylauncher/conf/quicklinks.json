@@ -2,14 +2,17 @@
   {
     "keyword": "jttp",
     "url": "https://justtothepoint.com/search/?query=",
-    "title": "JustToThePoint"
+    "title": "JustToThePoint",
+    "icon": "📝"
   },
   {
     "keyword": "google",
-    "url": "https://www.google.com/search?q={query}"
+    "url": "https://www.google.com/search?q={query}",
+    "icon": "🔍"
   },
   {
     "keyword": "yt",
-    "url": "https://www.youtube.com/results?search_query={query}"
+    "url": "https://www.youtube.com/results?search_query={query}",
+    "icon": "📺"
   }
 ]

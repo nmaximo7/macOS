@@ -58,6 +58,7 @@ class RunOptions:
     auto_force: bool = False  # kill: force quit without asking when it did not quit
     sleep: object = field(default=time.sleep, repr=False)  # replaced in tests so they do not really wait
     notify: bool = True  # copy_snippet: show a macOS notification
+    browser_command: tuple = ()  # open_url: ["/…/zen", "-new-tab", "{url}"]; empty = plain `open <url>`
 
 
 def default_runner(command: list, input_text: str | None = None) -> subprocess.CompletedProcess:
@@ -102,11 +103,31 @@ def shutdown(item: Item, runner=default_runner, dry_run: bool = False, options=N
 
 
 def open_url(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
-    """Open the web address stored in item.target in the default browser."""
-    command = ["open", item.target]
+    """Open the web address stored in item.target.
+
+    With `browser.command` in the configuration (for Zen/Firefox:  zen -new-tab {url} ) the address
+    opens as a NEW TAB of the browser that is already running; a plain `open <url>` can start a second
+    instance (a new window) instead. If that command is missing or fails, we fall back to `open`, so a
+    typing mistake in the setting never leaves you without your search.
+    """
+    options = options or RunOptions()
+    fallback = ["open", item.target]
     if not item.target.startswith(("http://", "https://")):  # never hand anything else to `open`
-        return ActionResult(False, f"refusing to open {item.target!r}: only http:// and https:// addresses", command)
-    return _execute(command, runner, dry_run, f"opened {item.target}")
+        return ActionResult(False, f"refusing to open {item.target!r}: only http:// and https:// addresses", fallback)
+    if not options.browser_command:
+        return _execute(fallback, runner, dry_run, f"opened {item.target}")
+    command = [part.replace("{url}", item.target) for part in options.browser_command]
+    if dry_run:
+        return _execute(command, runner, dry_run, "")
+    try:
+        completed = runner(command)
+        worked = completed.returncode == 0
+    except FileNotFoundError:
+        worked = False
+    if worked:
+        return ActionResult(True, f"opened {item.target} in a new tab", command)
+    result = _execute(fallback, runner, dry_run, f"opened {item.target} (the browser command did not work: {shlex.join(command[:1])})")
+    return result
 
 
 def prefix_hint(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:

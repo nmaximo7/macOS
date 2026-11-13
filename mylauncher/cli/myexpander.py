@@ -148,3 +148,28 @@ def preview(text: str, width: int = 70) -> str:
     """One short line for the list: lines joined with ⏎, cut at `width`."""
     line = " ⏎ ".join(part.strip() for part in text.strip().splitlines() if part.strip())
     return line if len(line) <= width else line[: width - 1].rstrip() + "…"
+
+
+def group_of(trigger: str, length: int) -> str:
+    """";pclarify" -> ";p" (the first `length` characters: the prefix character and the first letter)."""
+    return trigger[:length]
+
+
+def describe_groups(snippets, length: int, configured: dict) -> dict:
+    """{";p": (name, icon, count)} for every group.
+
+    The name comes from the configuration (expander.groups) when given; otherwise from the file the
+    group's snippets mostly live in ("bookmark.yml" -> "bookmark"), because people usually keep one
+    topic per file. The icon is only what the configuration says (empty = the default).
+    """
+    members: dict = {}
+    for snippet in snippets:
+        members.setdefault(group_of(snippet.trigger, length), []).append(snippet)
+    groups = {}
+    for prefix, items in members.items():
+        name, icon = configured.get(prefix, ("", ""))
+        if not name:
+            stems = [Path(s.source).stem for s in items if s.source]
+            name = max(set(stems), key=stems.count) if stems else ""
+        groups[prefix] = (name, icon, len(items))
+    return groups

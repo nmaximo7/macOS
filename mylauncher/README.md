@@ -3,7 +3,7 @@
 A small launcher for macOS in the spirit of Raycast or Alfred, built **slowly, in Python, for learning**.
 Press a hotkey (default **Command+D**), type, see suggestions, press Enter.
 
-> Status: **step 5 of N**. Engine, command line, tkinter window, Command+D hotkey, start at login, most-used-first, quicklinks, `kill`, the menu bar icon and Espanso snippets are built; see `docs/04-journal.md`.
+> Status: **step 6 of N**. Step 6: Raycast-like window, `run`/`;` lists, hotkey swallowed, searches in a new Zen tab. Engine, command line, tkinter window, Command+D hotkey, start at login, most-used-first, quicklinks, `kill`, the menu bar icon and Espanso snippets are built; see `docs/04-journal.md`.
 
 ## Layout
 
