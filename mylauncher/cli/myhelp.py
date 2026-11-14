@@ -375,6 +375,8 @@ def launcher_rows(config, runner) -> tuple:
         Row("run", config.run_word, "lists every application", f"{config.run_word}            all applications\n{config.run_word} saf        filter them", ""),
         Row("kill", config.kill_word, "close an application", f"{config.kill_word} <name>     quits it; asks before a force quit", ""),
         Row("help", config.help_word, "this help", f"{config.help_word}              the topics\n{config.help_word} aliases      a topic\n{config.help_word} functions x  a topic, filtered by x", ""),
+        Row("edit", config.edit_word, "open a file in your editor", f"{config.edit_word} <name>   opens a file of edit.json in the editor ({' '.join(config.edit_editor)})", ""),
+        Row("execute", config.execute_word, "run one of your commands", f"{config.execute_word} <name>   runs a command of execute.json (in a terminal or in the background)", ""),
         Row("snippets", ";", "snippet groups, then snippets", "; lists the groups; ;p the snippets of the group ;p. Enter copies the text.", ""),
     ]
     for link in config.quicklinks:
@@ -433,10 +435,11 @@ def load_rows(config, topic: str, runner, refresh: bool = False) -> tuple:
 # --------------------------------------------------------------------------- #
 # rows -> launcher items, and the search
 # --------------------------------------------------------------------------- #
-def row_item(topic: str, row: Row) -> Item:
+def row_item(config, topic: str, row: Row) -> Item:
     icon, _, label = TOPICS[topic]
     return Item(
         id=f"help:{topic}:{row.uid}", title=row.title, kind="help", action="copy_snippet", target=row.target or row.detail,
+        complete=f"{config.help_word} {topic} {row.title}",  # Tab keeps "help <topic>" and adds the row's name
         keywords=tuple(k for k in (row.subtitle[:120], " ".join(row.detail.split())[:400]) if k), subtitle=row.subtitle, icon=icon, badge=label, detail=row.detail,
     )
 
@@ -485,7 +488,7 @@ def help_search(config, query: str, runner, refresh: bool = False, **options) ->
     rows, problem = load_rows(config, topic, runner, refresh)
     if not rows:
         return [Match(problem_item(config, topic, problem), 100)]
-    return choose([row_item(topic, r) for r in rows])
+    return choose([row_item(config, topic, r) for r in rows])
 
 
 def help_end(config, query: str) -> int:

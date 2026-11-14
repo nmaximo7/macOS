@@ -15,6 +15,7 @@ class CliCase(support.TempDirCase):
         folder = self.make_apps("Applications", "Obsidian", "Safari", "Zen", "Visual Studio Code")
         self.config = str(self.write_config(support.good_config([folder])))
         self.runner = support.FakeRunner()
+        self.spawned = []  # (command, log file) of every program started "in the background"
 
     def call(self, *args, answers=(), runner=None):
         """Run the CLI; return (exit code, stdout, stderr)."""
@@ -28,7 +29,8 @@ class CliCase(support.TempDirCase):
 
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            code = M.main([*args, "--config", self.config], runner=runner or self.runner, ask=ask, sleep=lambda seconds: None)
+            code = M.main([*args, "--config", self.config], runner=runner or self.runner, ask=ask, sleep=lambda seconds: None,
+                         spawn=lambda command, log: self.spawned.append((command, str(log))))
         return code, out.getvalue(), err.getvalue()
 
 
@@ -39,12 +41,12 @@ class Listing(CliCase):
         self.assertEqual(code, 0)
         self.assertEqual(ids[0], "cmd:shutdown")
         self.assertIn("app:Obsidian", ids)
-        self.assertEqual(len(ids), 8)  # shutdown, the kill, help and run hints, 4 apps
+        self.assertEqual(len(ids), 10)  # shutdown, the kill, help, edit, execute and run hints, 4 apps
 
     def test_list_text(self):
         code, out, _ = self.call("list")
         self.assertIn("Run Obsidian", out)
-        self.assertIn("8 item(s)", out)
+        self.assertIn("10 item(s)", out)
 
 
 class Searching(CliCase):

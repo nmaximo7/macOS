@@ -15,6 +15,8 @@ MODE_LABELS = {
     "quicklink": "🔎 Web search",
     "snippets": "✂️ Snippets",
     "help": "📚 Help",
+    "edit": "📝 Edit a file",
+    "execute": "▶️ Execute",
 }
 
 

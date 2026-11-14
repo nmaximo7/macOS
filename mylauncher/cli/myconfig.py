@@ -24,6 +24,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from myactions import COMMAND_ACTIONS
+from myedit import load_edit
+from myexecute import DEFAULT_SHELL, DEFAULT_SOURCE, DEFAULT_TERMINAL_COMMAND, load_execute
 from myquicklinks import load_quicklinks
 from mytypes import ConfigError  # defined in mytypes.py; imported here so "from myconfig import ConfigError" keeps working
 
@@ -108,6 +110,19 @@ class Config:
     help_scripts_folder: Path = Path("~/macOS/scripts").expanduser()
     help_cache_seconds: int = 600  # how long the slow answers (aliases, system) are remembered; 0 = never
     help_cache_file: Path = Path("~/Library/Application Support/mylauncher/help-cache.json").expanduser()
+    edit_word: str = "edit"  # the word that lists the files of edit.json
+    edit_path: Path = Path("edit.json")  # relative paths: next to myconfiguration.json
+    edit_entries: tuple = ()  # tuple of EditEntry, read from that file by load_config
+    edit_editor: tuple = ("open", "-a", "Visual Studio Code", "{path}")  # {path} is replaced by the file
+    execute_word: str = "execute"
+    execute_path: Path = Path("execute.json")
+    execute_entries: tuple = ()  # tuple of ExecEntry
+    execute_shell: tuple = DEFAULT_SHELL  # runs "<shell> <script>"
+    execute_source: tuple = DEFAULT_SOURCE  # files loaded before every command (your zsh functions)
+    execute_terminal: bool = False  # default for entries that do not say "terminal": true/false
+    execute_terminal_command: tuple = DEFAULT_TERMINAL_COMMAND  # {command} is replaced by the script
+    execute_log_dir: Path = Path("~/Library/Logs/mylauncher/execute").expanduser()
+    execute_notify: bool = True  # background commands: a notification says how they ended
     browser_command: tuple = ()  # how to open a web address, with {url}; empty = the macOS default (open)
 
 
@@ -143,8 +158,11 @@ def load_config(path: Path) -> Config:
         raise ConfigError(f"{path} is not valid JSON (line {exc.lineno}, column {exc.colno}): {exc.msg}") from None
     config = parse_config(data, path)
     # The quicklinks live in their own file (conf/quicklinks.json); the keyword of the "kill" mode is reserved.
-    links = load_quicklinks(config.quicklinks_path, reserved=(config.kill_word, config.run_word, config.help_word))
-    return replace(config, quicklinks=links)
+    reserved = (config.kill_word, config.run_word, config.help_word, config.edit_word, config.execute_word)
+    links = load_quicklinks(config.quicklinks_path, reserved=reserved)
+    return replace(
+        config, quicklinks=links, edit_entries=load_edit(config.edit_path), execute_entries=load_execute(config.execute_path)
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -336,8 +354,43 @@ def parse_config(data, path: Path) -> Config:
     help_word = _check(help_section.get("word", "help"), str, "help.word").lower()
     if not help_word or len(help_word.split()) != 1:
         raise ConfigError('help.word must be ONE word, for example "help"')
-    if len({run_word, kill_word, help_word}) != 3:
-        raise ConfigError("apps.word, kill.word and help.word must be three different words")
+    edit_section = data.get("edit", {})
+    _check(edit_section, dict, "edit")
+    edit_word = _check(edit_section.get("word", "edit"), str, "edit.word").lower()
+    edit_file = Path(_check(edit_section.get("file", "edit.json"), str, "edit.file")).expanduser()
+    if not edit_file.is_absolute():
+        edit_file = Path(path).parent / edit_file
+    editor = edit_section.get("editor", "Visual Studio Code")
+    if isinstance(editor, str) and editor.strip():  # an application name: opened with `open -a`
+        editor_command = ("open", "-a", editor.strip(), "{path}")
+    else:
+        editor_command = tuple(_text_list(editor, "edit.editor"))
+        if not editor_command or not any("{path}" in part for part in editor_command):
+            raise ConfigError('edit.editor must be an application name ("TextEdit") or a command list containing "{path}", for example ["nvim", "{path}"]')
+
+    exec_section = data.get("execute", {})
+    _check(exec_section, dict, "execute")
+    execute_word = _check(exec_section.get("word", "execute"), str, "execute.word").lower()
+    exec_file = Path(_check(exec_section.get("file", "execute.json"), str, "execute.file")).expanduser()
+    if not exec_file.is_absolute():
+        exec_file = Path(path).parent / exec_file
+    exec_shell = tuple(_text_list(exec_section.get("shell", list(DEFAULT_SHELL)), "execute.shell"))
+    if not exec_shell:
+        raise ConfigError('execute.shell cannot be empty, for example ["/bin/zsh", "-lc"]')
+    exec_source = tuple(_text_list(exec_section.get("source", list(DEFAULT_SOURCE)), "execute.source"))
+    exec_terminal = _check(exec_section.get("terminal", False), bool, "execute.terminal")
+    terminal_command = tuple(_text_list(exec_section.get("terminal_command", list(DEFAULT_TERMINAL_COMMAND)), "execute.terminal_command"))
+    if not any("{command}" in part for part in terminal_command):
+        raise ConfigError('execute.terminal_command must contain "{command}" where the script goes')
+    exec_log_dir = Path(_check(exec_section.get("log_dir", "~/Library/Logs/mylauncher/execute"), str, "execute.log_dir")).expanduser()
+    exec_notify = _check(exec_section.get("notify", True), bool, "execute.notify")
+
+    words = [run_word, kill_word, help_word, edit_word, execute_word]
+    for word_name, word in (("edit.word", edit_word), ("execute.word", execute_word)):
+        if not word or len(word.split()) != 1:
+            raise ConfigError(f"{word_name} must be ONE word")
+    if len(set(words)) != len(words):
+        raise ConfigError("apps.word, kill.word, help.word, edit.word and execute.word must all be different words")
     defaults = Config.__dataclass_fields__
     help_paths = {}
     for setting, field_name in (("aliases_file", "help_aliases_file"), ("functions_file", "help_functions_file"),
@@ -393,6 +446,17 @@ def parse_config(data, path: Path) -> Config:
         window_colors=colors,
         browser_command=browser_command,
         help_word=help_word,
+        edit_word=edit_word,
+        edit_path=edit_file,
+        edit_editor=editor_command,
+        execute_word=execute_word,
+        execute_path=exec_file,
+        execute_shell=exec_shell,
+        execute_source=exec_source,
+        execute_terminal=exec_terminal,
+        execute_terminal_command=terminal_command,
+        execute_log_dir=exec_log_dir,
+        execute_notify=exec_notify,
         help_cache_seconds=cache_seconds,
         **help_paths,
     )

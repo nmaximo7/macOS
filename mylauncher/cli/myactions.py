@@ -29,6 +29,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from myexecute import DEFAULT_SHELL, DEFAULT_SOURCE, DEFAULT_TERMINAL_COMMAND, background_script, terminal_script
 from mykill import alive, applescript_quote, running_apps
 from mytypes import Item
 
@@ -59,6 +60,25 @@ class RunOptions:
     sleep: object = field(default=time.sleep, repr=False)  # replaced in tests so they do not really wait
     notify: bool = True  # copy_snippet: show a macOS notification
     browser_command: tuple = ()  # open_url: ["/…/zen", "-new-tab", "{url}"]; empty = plain `open <url>`
+    editor_command: tuple = ("open", "-a", "Visual Studio Code", "{path}")  # edit_file: {path} = the file
+    shell: tuple = DEFAULT_SHELL  # execute_*: "<shell> <script>"
+    source_files: tuple = DEFAULT_SOURCE  # execute_*: loaded before the command (your zsh functions)
+    terminal_command: tuple = DEFAULT_TERMINAL_COMMAND  # execute_terminal: {command} = the script
+    log_dir: Path = Path("~/Library/Logs/mylauncher/execute").expanduser()  # execute_background: one log per command
+    execute_notify: bool = True  # execute_background: a notification when it ends
+    spawn: object = field(default=None, repr=False)  # starts a program without waiting for it; None = default_spawn
+
+
+def default_spawn(command: list, log_path) -> None:
+    """Start a program and do NOT wait for it: a script may run for minutes, the launcher must not.
+
+    Its output goes to `log_path` (replaced at every run: the log of the LAST run). start_new_session
+    detaches it from the launcher, so it goes on even if the launcher is restarted.
+    """
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "wb") as log:
+        subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)  # noqa: S603
 
 
 def default_runner(command: list, input_text: str | None = None) -> subprocess.CompletedProcess:
@@ -230,7 +250,82 @@ def kill_app(item: Item, runner=default_runner, dry_run: bool = False, options=N
 
 # The "phone book" of actions: the name written in an Item -> the function to call.
 # To teach the launcher a new trick you write a function above and add one line here.
+def edit_file(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """Open item.target in the editor of the configuration (`edit.editor`).
+
+    If that editor cannot be started (the application is not installed, a typing mistake...) we fall
+    back to `open -t`: the editor macOS uses for text files. The file must exist.
+    """
+    options = options or RunOptions()
+    path = Path(item.target)
+    command = [part.replace("{path}", str(path)) for part in options.editor_command]
+    fallback = ["open", "-t", str(path)]
+    if dry_run:
+        return ActionResult(True, f"dry run, nothing was done. Would run: {shlex.join(command)}", command)
+    if not path.exists():
+        return ActionResult(False, f"file not found: {path}", command)
+    try:
+        done = runner(command)
+        worked = done.returncode == 0
+    except FileNotFoundError:
+        worked = False
+    if worked:
+        return ActionResult(True, f"opened {path}", command)
+    result = _execute(fallback, runner, False, f"opened {path} (the editor command did not work: {shlex.join(command[:3])})")
+    return result
+
+
+def _log_path(item: Item, options: RunOptions) -> Path:
+    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in item.title) or "command"
+    return Path(options.log_dir) / f"{safe}.log"
+
+
+def execute_background(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """Run item.target (a command line) in the background: zsh starts it and we do not wait.
+
+    A notification tells how it ended; its output is in the log file (shown in the message).
+    """
+    options = options or RunOptions()
+    script = background_script(item.title, item.target, options.source_files, options.execute_notify)
+    command = [*options.shell, script]
+    log = _log_path(item, options)
+    if dry_run:
+        return ActionResult(True, f"dry run, nothing was done. Would run in the background: {item.target}   (zsh script and log: {log})", command)
+    spawn = options.spawn or default_spawn
+    try:
+        spawn(command, log)
+    except OSError as exc:
+        return ActionResult(False, f"could not start {item.title!r}: {exc}", command)
+    return ActionResult(True, f"started {item.title!r} in the background (log: {log})", command)
+
+
+def execute_terminal(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """Run item.target in a new terminal window (`execute.terminal_command`), so you see the output.
+
+    If the terminal cannot be started, run it in the background instead, so the command is not lost.
+    """
+    options = options or RunOptions()
+    script = terminal_script(item.target, options.source_files)
+    command = [part.replace("{command}", script) for part in options.terminal_command]
+    if dry_run:
+        return ActionResult(True, f"dry run, nothing was done. Would run in a terminal: {item.target}   (command: {shlex.join(command[:4])} ...)", command)
+    try:
+        done = runner(command)
+        worked = done.returncode == 0
+    except FileNotFoundError:
+        worked = False
+    if worked:
+        return ActionResult(True, f"started {item.title!r} in a terminal window", command)
+    result = execute_background(item, runner, False, options)
+    if result.ok:
+        return ActionResult(True, f"{result.message}  (the terminal command did not work: {shlex.join(command[:3])})", result.command)
+    return result
+
+
 ACTIONS = {
+    "edit_file": edit_file,
+    "execute_background": execute_background,
+    "execute_terminal": execute_terminal,
     "open_app": open_app,
     "shutdown": shutdown,
     "open_url": open_url,

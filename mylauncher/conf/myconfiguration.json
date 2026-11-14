@@ -69,6 +69,35 @@
     "scripts_folder": "~/macOS/scripts",
     "cache_seconds": 600
   },
+  "edit": {
+    "word": "edit",
+    "file": "edit.json",
+    "editor": "Visual Studio Code"
+  },
+  "execute": {
+    "word": "execute",
+    "file": "execute.json",
+    "shell": [
+      "/bin/zsh",
+      "-lc"
+    ],
+    "source": [
+      "~/.zsh_functions"
+    ],
+    "terminal": false,
+    "terminal_command": [
+      "open",
+      "-na",
+      "Ghostty",
+      "--args",
+      "-e",
+      "/bin/zsh",
+      "-lc",
+      "{command}"
+    ],
+    "log_dir": "~/Library/Logs/mylauncher/execute",
+    "notify": true
+  },
   "apps": {
     "word": "run",
     "folders": [

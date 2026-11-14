@@ -43,10 +43,12 @@ import sys
 import time
 from pathlib import Path
 
-from myactions import RunOptions, default_runner, run_item
+from myactions import RunOptions, default_runner, default_spawn, run_item
 from myapps import find_apps
 from myconfig import Config, ConfigError, find_config_path, load_config
 from myexpander import describe_groups, group_of, load_snippets, preview
+from myedit import build_edit_items
+from myexecute import build_execute_items
 from myhelp import TOPICS, help_end, help_search
 from myhistory import History
 from mykill import running_apps
@@ -54,7 +56,7 @@ from myquicklinks import build_url
 from mysearch import complete, rank, split_prefix
 from mytypes import Item, Match
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 
 SCORE_MODE = 200  # a quicklink you have already started typing a query for beats everything else
 
@@ -106,6 +108,30 @@ def build_items(config: Config) -> list:
             complete=f"{config.help_word} ",
             subtitle="Aliases, functions, AeroSpace keys, snippets, scripts...",
             icon="📚",
+        )
+    )
+    items.append(
+        Item(
+            id=f"prefix:{config.edit_word}",
+            title=f"Edit a file ({config.edit_word} <name>)",
+            kind="prefix",
+            action="prefix_hint",
+            keywords=(config.edit_word,),
+            complete=f"{config.edit_word} ",
+            subtitle="Files of edit.json: your configuration, scripts, notes",
+            icon="📝",
+        )
+    )
+    items.append(
+        Item(
+            id=f"prefix:{config.execute_word}",
+            title=f"Execute a command ({config.execute_word} <name>)",
+            kind="prefix",
+            action="prefix_hint",
+            keywords=(config.execute_word,),
+            complete=f"{config.execute_word} ",
+            subtitle="Commands of execute.json: scripts, maintenance, briefing",
+            icon="▶️",
         )
     )
     items.append(
@@ -206,7 +232,7 @@ def detect_mode(config: Config, query: str) -> tuple:
     """(mode, n): what the launcher understood and how many characters at the start of the query
     make up the recognised command (the window paints them in colour).
 
-    mode is one of: "normal", "run", "kill", "help", "quicklink", "snippets".
+    mode is one of: "normal", "run", "kill", "help", "edit", "execute", "quicklink", "snippets".
     """
     text = query.lstrip()
     lead = len(query) - len(text)
@@ -218,6 +244,10 @@ def detect_mode(config: Config, query: str) -> tuple:
         return "kill", lead + len(word)
     if word == config.help_word:
         return "help", lead + help_end(config, text)
+    if word == config.edit_word:
+        return "edit", lead + len(word)
+    if word == config.execute_word:
+        return "execute", lead + len(word)
     if parts:
         for link in config.quicklinks:
             if word == link.keyword:
@@ -273,6 +303,12 @@ def _search(config: Config, query: str, limit: int | None = None, runner=default
 
     if mode == "help":
         return help_search(config, query, runner, **options)
+
+    if mode in ("edit", "execute"):  # the lists of edit.json / execute.json, filtered by what follows the word
+        items = build_edit_items(config) if mode == "edit" else build_execute_items(config)
+        if not rest.strip():  # nothing typed yet: the order of the file
+            return [Match(i, 100) for i in items[: config.max_browse_results]]
+        return rank(items, rest, config.max_browse_results, **{**options, "fuzzy": False})
 
     if mode == "snippets":
         typed = query.strip()
@@ -364,7 +400,7 @@ def cmd_complete(args, config: Config, runner=default_runner, **_) -> int:
     return 0
 
 
-def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.sleep, **_) -> int:
+def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.sleep, spawn=default_spawn, **_) -> int:
     typed = args.text if args.text is not None else " ".join(args.query)
 
     # 1. Which item? An exact --id, or the best match for the words given (what Enter does).
@@ -403,6 +439,13 @@ def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.s
         sleep=sleep,
         notify=config.expander_notify,
         browser_command=config.browser_command,
+        editor_command=config.edit_editor,
+        shell=config.execute_shell,
+        source_files=config.execute_source,
+        terminal_command=config.execute_terminal_command,
+        log_dir=config.execute_log_dir,
+        execute_notify=config.execute_notify,
+        spawn=spawn,
     )
     result = run_item(item, runner=runner, dry_run=args.dry_run, options=options)
 
@@ -547,6 +590,19 @@ def cmd_doctor(args, config: Config | None = None, config_error: str = "", **_) 
         results.append(
             ("✔" if exists else "!", f"quicklinks: {len(config.quicklinks)} in {config.quicklinks_path}" + ("" if exists else " (file not found: no quicklinks)"))
         )
+        for label, path_, entries in (("edit", config.edit_path, config.edit_entries), ("execute", config.execute_path, config.execute_entries)):
+            there = path_.is_file()
+            results.append(("✔" if there else "!", f"{label}: {len(entries)} entr{'y' if len(entries) == 1 else 'ies'} in {path_}" + ("" if there else " (file not found)")))
+        editor = config.edit_editor
+        if editor[0] == "open" and len(editor) > 2 and editor[1] == "-a":
+            known = any((Path(root) / f"{editor[2]}.app").exists() for root in ("/Applications", "/System/Applications", str(Path.home() / "Applications")))
+            results.append(("✔" if known else "!", f"editor: {editor[2]}" + ("" if known else " (application not found in /Applications; edit.editor)")))
+        else:
+            found = shutil.which(editor[0])
+            results.append(("✔" if found else "!", f"editor: {editor[0]}" + (f" ({found})" if found else " (program not found; edit.editor)")))
+        missing = [i.title for i in build_edit_items(config) if i.badge == "Missing"]
+        if missing:
+            results.append(("!", f"edit: {len(missing)} file(s) do not exist: " + ", ".join(missing[:5]) + (" ..." if len(missing) > 5 else "")))
         if config.usage_enabled:
             counts = History(config.usage_file, True).counts()
             results.append(("✔", f"usage history on: {len(counts)} item(s) remembered in {config.usage_file}"))
@@ -640,7 +696,7 @@ def make_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv=None, runner=default_runner, ask=input, sleep=time.sleep) -> int:
+def main(argv=None, runner=default_runner, ask=input, sleep=time.sleep, spawn=default_spawn) -> int:
     """Entry point. `runner`, `ask` and `sleep` can be replaced in tests (no real command, nobody asked, no waiting)."""
     args = make_parser().parse_args(argv)
     config, config_error = None, ""
@@ -650,7 +706,7 @@ def main(argv=None, runner=default_runner, ask=input, sleep=time.sleep) -> int:
         config_error = str(exc)
     if config is None and args.command not in ("doctor", "report"):  # doctor and report report the problem itself
         return _fail(args, config_error, code=2)
-    return args.func(args, config=config, config_error=config_error, runner=runner, ask=ask, sleep=sleep)
+    return args.func(args, config=config, config_error=config_error, runner=runner, ask=ask, sleep=sleep, spawn=spawn)
 
 
 if __name__ == "__main__":

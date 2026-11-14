@@ -104,6 +104,10 @@ class Topics(HelpCase):
         self.assertEqual(self.titles("help al")[0], "aliases")
         self.assertEqual(self.titles("help fu"), ["functions"])
 
+    def test_tab_on_a_row_keeps_help_and_the_topic(self):
+        self.assertEqual(self.search("help zsh_alias gs")["completion"], "help aliases gs")
+        self.assertEqual(self.search("help aliases")["completion"], "help aliases gs")
+
     def test_synonyms(self):
         for word, topic in (("zsh_alias", "aliases"), ("zsh_functions", "functions"), ("sys", "system"), ("snippets", "espanso")):
             self.assertEqual(myhelp.resolve_topic(word), topic)
@@ -343,7 +347,7 @@ class ConfigHelp(unittest.TestCase):
         self.assertNotIn("~", str(c.help_scripts_folder))
 
     def test_words_must_differ(self):
-        with self.assertRaisesRegex(ConfigError, "three different"):
+        with self.assertRaisesRegex(ConfigError, "must all be different"):
             self.parse(word="run")
         with self.assertRaisesRegex(ConfigError, "help.word"):
             self.parse(word="two words")

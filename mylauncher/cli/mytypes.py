@@ -28,8 +28,8 @@ class ConfigError(Exception):
 
 
 # What the window shows when an item does not choose its own emoji / label. One place to change them.
-DEFAULT_ICONS = {"app": "🚀", "command": "⚡", "prefix": "💡", "quicklink": "🔎", "kill": "💀", "snippet": "✂️", "help": "📚"}
-KIND_LABELS = {"app": "Application", "command": "Command", "prefix": "Hint", "quicklink": "Quicklink", "kill": "Running app", "snippet": "Snippet", "help": "Help"}
+DEFAULT_ICONS = {"app": "🚀", "command": "⚡", "prefix": "💡", "quicklink": "🔎", "kill": "💀", "snippet": "✂️", "help": "📚", "edit": "📝", "execute": "▶️"}
+KIND_LABELS = {"app": "Application", "command": "Command", "prefix": "Hint", "quicklink": "Quicklink", "kill": "Running app", "snippet": "Snippet", "help": "Help", "edit": "File", "execute": "Execute"}
 
 
 @dataclass(frozen=True)
