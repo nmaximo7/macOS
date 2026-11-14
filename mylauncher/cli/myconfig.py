@@ -99,6 +99,15 @@ class Config:
     window_font: str = "Helvetica Neue"
     window_style: str = "borderless"  # "borderless": no title bar buttons; "standard": a normal window
     window_colors: dict = field(default_factory=lambda: dict(DEFAULT_COLORS))
+    help_word: str = "help"  # the word that opens the help topics
+    help_aliases_file: Path = Path("~/.zsh_aliases").expanduser()  # comments above each alias are read from here
+    help_functions_file: Path = Path("~/.zsh_functions").expanduser()
+    help_aerospace_config: Path = Path("~/.config/aerospace/aerospace.toml").expanduser()
+    help_skills_folder: Path = Path("~/macOS/claude/skills").expanduser()
+    help_script: Path = Path("~/macOS/scripts/help.sh").expanduser()  # holds the sec_<name>() cheat sheets
+    help_scripts_folder: Path = Path("~/macOS/scripts").expanduser()
+    help_cache_seconds: int = 600  # how long the slow answers (aliases, system) are remembered; 0 = never
+    help_cache_file: Path = Path("~/Library/Application Support/mylauncher/help-cache.json").expanduser()
     browser_command: tuple = ()  # how to open a web address, with {url}; empty = the macOS default (open)
 
 
@@ -134,7 +143,7 @@ def load_config(path: Path) -> Config:
         raise ConfigError(f"{path} is not valid JSON (line {exc.lineno}, column {exc.colno}): {exc.msg}") from None
     config = parse_config(data, path)
     # The quicklinks live in their own file (conf/quicklinks.json); the keyword of the "kill" mode is reserved.
-    links = load_quicklinks(config.quicklinks_path, reserved=(config.kill_word, config.run_word))
+    links = load_quicklinks(config.quicklinks_path, reserved=(config.kill_word, config.run_word, config.help_word))
     return replace(config, quicklinks=links)
 
 
@@ -322,8 +331,24 @@ def parse_config(data, path: Path) -> Config:
     if browser_command and not any("{url}" in part for part in browser_command):
         raise ConfigError('browser.command must contain "{url}" where the web address goes')
 
-    if run_word == kill_word:
-        raise ConfigError("apps.word and kill.word must be different words")
+    help_section = data.get("help", {})
+    _check(help_section, dict, "help")
+    help_word = _check(help_section.get("word", "help"), str, "help.word").lower()
+    if not help_word or len(help_word.split()) != 1:
+        raise ConfigError('help.word must be ONE word, for example "help"')
+    if len({run_word, kill_word, help_word}) != 3:
+        raise ConfigError("apps.word, kill.word and help.word must be three different words")
+    defaults = Config.__dataclass_fields__
+    help_paths = {}
+    for setting, field_name in (("aliases_file", "help_aliases_file"), ("functions_file", "help_functions_file"),
+                            ("aerospace_config", "help_aerospace_config"), ("skills_folder", "help_skills_folder"),
+                            ("help_script", "help_script"), ("scripts_folder", "help_scripts_folder"),
+                            ("cache_file", "help_cache_file")):
+        text = _check(help_section.get(setting, str(defaults[field_name].default)), str, f"help.{setting}")
+        help_paths[field_name] = Path(text).expanduser()
+    cache_seconds = _check(help_section.get("cache_seconds", 600), int, "help.cache_seconds")
+    if cache_seconds < 0:
+        raise ConfigError("help.cache_seconds cannot be negative (0 = do not remember)")
 
     return Config(
         path=Path(path),
@@ -367,4 +392,7 @@ def parse_config(data, path: Path) -> Config:
         window_style=style,
         window_colors=colors,
         browser_command=browser_command,
+        help_word=help_word,
+        help_cache_seconds=cache_seconds,
+        **help_paths,
     )

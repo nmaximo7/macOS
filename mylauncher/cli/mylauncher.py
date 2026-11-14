@@ -46,18 +46,17 @@ from pathlib import Path
 from myactions import RunOptions, default_runner, run_item
 from myapps import find_apps
 from myconfig import Config, ConfigError, find_config_path, load_config
-from myexpander import describe_groups, load_snippets, preview
+from myexpander import describe_groups, group_of, load_snippets, preview
+from myhelp import TOPICS, help_end, help_search
 from myhistory import History
 from mykill import running_apps
 from myquicklinks import build_url
 from mysearch import complete, rank, split_prefix
 from mytypes import Item, Match
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 
-SCORE_MODE = (
-    200  # a quicklink you have already started typing a query for beats everything else
-)
+SCORE_MODE = 200  # a quicklink you have already started typing a query for beats everything else
 
 
 # --------------------------------------------------------------------------- #
@@ -99,6 +98,18 @@ def build_items(config: Config) -> list:
     )
     items.append(
         Item(
+            id=f"prefix:{config.help_word}",
+            title=f"Help about your Mac ({config.help_word} <topic>)",
+            kind="prefix",
+            action="prefix_hint",
+            keywords=(config.help_word, "aliases", "functions", "aerospace", "shortcuts"),
+            complete=f"{config.help_word} ",
+            subtitle="Aliases, functions, AeroSpace keys, snippets, scripts...",
+            icon="📚",
+        )
+    )
+    items.append(
+        Item(
             id=f"prefix:{config.run_word}",
             title=f"List all applications ({config.run_word})",
             kind="prefix",
@@ -123,16 +134,7 @@ def build_items(config: Config) -> list:
             )
         )
     for name, path in find_apps(config.app_folders, config.app_exclude):
-        items.append(
-            Item(
-                id=f"app:{name}",
-                title=f"Run {name}",
-                kind="app",
-                action="open_app",
-                target=str(path),
-                subtitle=str(path.parent),
-            )
-        )
+        items.append(Item(id=f"app:{name}", title=f"Run {name}", kind="app", action="open_app", target=str(path), subtitle=str(path.parent)))
     return items
 
 
@@ -166,9 +168,7 @@ def build_group_items(config: Config, prefix: str = "") -> list:
     if not config.expander_enabled:
         return []
     scan = load_snippets(config.expander_folder, config.expander_strip_cursor)
-    groups = describe_groups(
-        scan.snippets, config.expander_group_length, config.expander_groups
-    )
+    groups = describe_groups(scan.snippets, config.expander_group_length, config.expander_groups)
     items = []
     for key in sorted(groups):
         if not key.startswith(prefix):
@@ -193,36 +193,20 @@ def snippet_problem(config: Config) -> Item | None:
     """A row that explains WHY the snippet list is empty (missing PyYAML, folder not found), or None."""
     scan = load_snippets(config.expander_folder, config.expander_strip_cursor)
     if scan.missing_yaml:
-        title, hint = (
-            "Snippets are off: PyYAML is not installed",
-            ".venv/bin/pip install pyyaml  then  mlauto restart",
-        )
+        title, hint = "Snippets are off: PyYAML is not installed", ".venv/bin/pip install pyyaml  then  mlauto restart"
     elif not scan.snippets:
         title = "No snippets found"
-        hint = (
-            scan.problems[0]
-            if scan.problems
-            else f"no triggers in {config.expander_folder}"
-        )
+        hint = scan.problems[0] if scan.problems else f"no triggers in {config.expander_folder}"
     else:
         return None
-    return Item(
-        id="info:snippets",
-        title=title,
-        kind="prefix",
-        action="prefix_hint",
-        complete=";",
-        subtitle=hint,
-        icon="⚠️",
-        badge="Fix",
-    )
+    return Item(id="info:snippets", title=title, kind="prefix", action="prefix_hint", complete=";", subtitle=hint, icon="⚠️", badge="Fix")
 
 
 def detect_mode(config: Config, query: str) -> tuple:
     """(mode, n): what the launcher understood and how many characters at the start of the query
     make up the recognised command (the window paints them in colour).
 
-    mode is one of: "normal", "run", "kill", "quicklink", "snippets".
+    mode is one of: "normal", "run", "kill", "help", "quicklink", "snippets".
     """
     text = query.lstrip()
     lead = len(query) - len(text)
@@ -232,16 +216,13 @@ def detect_mode(config: Config, query: str) -> tuple:
         return "run", lead + len(word)
     if word == config.kill_word:
         return "kill", lead + len(word)
+    if word == config.help_word:
+        return "help", lead + help_end(config, text)
     if parts:
         for link in config.quicklinks:
             if word == link.keyword:
                 return "quicklink", lead + len(word)
-    if (
-        text
-        and not text[0].isalnum()
-        and not text[0].isspace()
-        and config.expander_enabled
-    ):
+    if text and not text[0].isalnum() and not text[0].isspace() and config.expander_enabled:
         return "snippets", lead + len(text.split()[0])
     return "normal", 0
 
@@ -251,14 +232,10 @@ def _bonus(config: Config):
     if not config.usage_enabled:
         return None
     counts = History(config.usage_file, True).counts()
-    return lambda item: min(
-        counts.get(item.id, 0) * config.usage_boost_per_use, config.usage_max_boost
-    )
+    return lambda item: min(counts.get(item.id, 0) * config.usage_boost_per_use, config.usage_max_boost)
 
 
-def _search(
-    config: Config, query: str, limit: int | None = None, runner=default_runner
-) -> list:
+def _search(config: Config, query: str, limit: int | None = None, runner=default_runner) -> list:
     """items -> ranked matches for `query`.
 
     Three situations, decided by the FIRST word you typed:
@@ -267,20 +244,14 @@ def _search(
       * anything else: the normal search over commands, hints and apps.
     """
     limit = config.max_results if limit is None else limit
-    options = dict(
-        ignore_accents=config.ignore_accents, fuzzy=config.fuzzy, bonus=_bonus(config)
-    )
+    options = dict(ignore_accents=config.ignore_accents, fuzzy=config.fuzzy, bonus=_bonus(config))
     parts = split_prefix(query)
     word, rest = parts if parts else ("", "")
 
     if parts:
         for link in config.quicklinks:
             if word == link.keyword:
-                title = (
-                    f"Search {link.title} for {rest}"
-                    if rest
-                    else f"Search {link.title}: type what to look for"
-                )
+                title = f"Search {link.title} for {rest}" if rest else f"Search {link.title}: type what to look for"
                 item = Item(
                     id=f"link:{link.keyword}",
                     title=title,
@@ -300,6 +271,9 @@ def _search(
         apps = [i for i in build_items(config) if i.kind == "app"]
         return rank(apps, rest, config.max_browse_results, **options)
 
+    if mode == "help":
+        return help_search(config, query, runner, **options)
+
     if mode == "snippets":
         typed = query.strip()
         problem = snippet_problem(config)
@@ -308,44 +282,20 @@ def _search(
         if len(typed) < config.expander_group_length:
             groups = build_group_items(config, typed)
             return [Match(g, 100) for g in groups[: config.max_browse_results]]
-        snippets = [
-            i
-            for i in build_snippet_items(config)
-            if i.title.lower().startswith(typed.lower())
-        ]
-        if (
-            not snippets
-        ):  # nothing starts like that: let the normal ranking look inside the texts too
-            return rank(
-                build_snippet_items(config), typed, config.max_browse_results, **options
-            )
+        snippets = [i for i in build_snippet_items(config) if i.title.lower().startswith(typed.lower())]
+        if not snippets:  # nothing starts like that: let the normal ranking look inside the texts too
+            return rank(build_snippet_items(config), typed, config.max_browse_results, **options)
         return rank(snippets, typed, config.max_browse_results, **options)
 
-    if query.strip().lower() == config.kill_word or (
-        parts and word == config.kill_word
-    ):
+    if query.strip().lower() == config.kill_word or (parts and word == config.kill_word):
         apps = running_apps(runner, config.kill_protected)
         # Rank on the bare names, then give each result its final title: otherwise the word "Kill"
         # in every title would match whatever you type after "kill".
-        named = [
-            Item(
-                id=f"kill:{a.name}",
-                title=a.name,
-                kind="kill",
-                action="kill_app",
-                target=a.path,
-                subtitle=a.path,
-            )
-            for a in apps
-        ]
+        named = [Item(id=f"kill:{a.name}", title=a.name, kind="kill", action="kill_app", target=a.path, subtitle=a.path) for a in apps]
         matches = rank(named, rest, config.max_browse_results, **options)
         return [
             Match(
-                dataclasses.replace(
-                    m.item,
-                    title=f"Kill {m.item.title}",
-                    complete=f"{config.kill_word} {m.item.title.lower()}",
-                ),
+                dataclasses.replace(m.item, title=f"Kill {m.item.title}", complete=f"{config.kill_word} {m.item.title.lower()}"),
                 m.score,
             )
             for m in matches
@@ -399,18 +349,14 @@ def cmd_search(args, config: Config, runner=default_runner, **_) -> int:
         return 1
     width = max(len(m.item.title) for m in matches)
     for number, match in enumerate(matches, start=1):
-        print(
-            f"{number:>2}. {match.item.title:<{width}}  {match.item.kind:<8} score {match.score}"
-        )
+        print(f"{number:>2}. {match.item.title:<{width}}  {match.item.kind:<8} score {match.score}")
     print(f"\ncompletion: {completion}")
     return 0
 
 
 def cmd_complete(args, config: Config, runner=default_runner, **_) -> int:
     query = " ".join(args.query)
-    completion = complete(
-        query, _search(config, query, runner=runner), config.ignore_accents
-    )
+    completion = complete(query, _search(config, query, runner=runner), config.ignore_accents)
     if args.json:
         _print_json({"query": query, "completion": completion})
     else:
@@ -418,30 +364,20 @@ def cmd_complete(args, config: Config, runner=default_runner, **_) -> int:
     return 0
 
 
-def cmd_run(
-    args, config: Config, runner=default_runner, ask=input, sleep=time.sleep, **_
-) -> int:
+def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.sleep, **_) -> int:
     typed = args.text if args.text is not None else " ".join(args.query)
 
     # 1. Which item? An exact --id, or the best match for the words given (what Enter does).
     if args.id:
         # Dynamic items (a quicklink with its query, a running app to kill) only exist for the text
         # that produced them, so we search with --text first, then fall back to the static items.
-        candidates = (
-            [m.item for m in _search(config, typed, limit=1000, runner=runner)]
-            + build_items(config)
-            + build_snippet_items(config)
-        )
+        candidates = [m.item for m in _search(config, typed, limit=1000, runner=runner)] + build_items(config) + build_snippet_items(config)
         item = next((i for i in candidates if i.id == args.id), None)
         if item is None:
             return _fail(args, f"no item with id {args.id!r} (see: list)")
     else:
         if not typed.strip():
-            return _fail(
-                args,
-                "say what to run, for example:  run obsidian   (or use --id)",
-                code=2,
-            )
+            return _fail(args, "say what to run, for example:  run obsidian   (or use --id)", code=2)
         matches = _search(config, typed, limit=1, runner=runner)
         if not matches:
             return _fail(args, f"no match for {typed!r}")
@@ -450,14 +386,10 @@ def cmd_run(
     # 2. Dangerous things ask first (unless --yes, or it is only a dry run).
     if item.confirm and not args.yes and not args.dry_run:
         if args.json:  # JSON mode must not print questions: the caller (the window) asks and passes --yes
-            return _fail(
-                args, f"'{item.title}' needs confirmation: run again with --yes"
-            )
+            return _fail(args, f"'{item.title}' needs confirmation: run again with --yes")
         try:
             answer = ask(f"{item.title}: are you sure? [y/N] ")
-        except (
-            EOFError
-        ):  # nobody is there to answer (for example a script): treat as "no"
+        except EOFError:  # nobody is there to answer (for example a script): treat as "no"
             answer = ""
         if answer.strip().lower() not in ("y", "yes"):
             print("cancelled")
@@ -475,7 +407,7 @@ def cmd_run(
     result = run_item(item, runner=runner, dry_run=args.dry_run, options=options)
 
     # 4. Remember it (for "most used first"), but only real, successful runs of real items.
-    if result.ok and not args.dry_run and item.kind != "prefix":
+    if result.ok and not args.dry_run and item.kind not in ("prefix", "help"):
         History(config.usage_file, config.usage_enabled).record(item.id)
 
     if args.json:
@@ -483,6 +415,75 @@ def cmd_run(
     else:
         print(f"{item.title}: {result.message}")
     return 0 if result.ok else 1
+
+
+def cmd_help(args, config: Config, runner=default_runner, **_) -> int:
+    """ml help [topic] [words...]: the same lists the launcher shows after typing `help`."""
+    words = list(args.query)
+    query = " ".join([config.help_word] + words)
+    options = dict(ignore_accents=config.ignore_accents, fuzzy=config.fuzzy)
+    matches = help_search(config, query, runner, refresh=args.refresh, **options)
+    if args.json:
+        _print_json([m.item.to_dict() for m in matches])
+        return 0
+    if not matches:
+        print("nothing matches. Topics: " + ", ".join(TOPICS))
+        return 1
+    width = min(max(len(m.item.title) for m in matches), 40)
+    for m in matches:
+        sub = " ".join(m.item.subtitle.split())
+        print(f"{m.item.title:<{width}}  {sub[:100]}{'…' if len(sub) > 100 else ''}")
+    if len(matches) == 1 and matches[0].item.kind == "help":  # exactly one row: show everything about it
+        print("\n" + matches[0].item.detail)
+    return 0
+
+
+def cmd_report(args, config: Config | None = None, config_error: str = "", runner=default_runner, **_) -> int:
+    """Everything worth pasting into a bug report, in one go (nothing secret: no file contents but the logs)."""
+    import contextlib
+    import io
+    import platform
+    from importlib import metadata
+
+    def section(title):
+        print(f"\n== {title} ==")
+
+    print(f"mylauncher {VERSION} report, {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    section("python")
+    print(f"version    {sys.version.split()[0]}\nexecutable {sys.executable}\nreal file  {os.path.realpath(sys.executable)}  <- the one Accessibility / Input Monitoring need")
+    print(f"platform   {platform.platform()}")
+    section("packages (of the python above)")
+    for package in ("pynput", "pyobjc-framework-Cocoa", "pyobjc-framework-Quartz", "PyYAML"):
+        try:
+            print(f"{package:<26}{metadata.version(package)}")
+        except metadata.PackageNotFoundError:
+            print(f"{package:<26}NOT INSTALLED")
+    section("doctor")
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        cmd_doctor(args, config=config, config_error=config_error)
+    print(buffer.getvalue().rstrip())
+    if config is None:
+        return 1
+    section(f"launch agent {config.autostart_label}")
+    try:
+        done = runner(["launchctl", "print", f"gui/{os.getuid()}/{config.autostart_label}"])
+        text = (done.stdout or done.stderr or "").strip()
+        keep = [ln for ln in text.splitlines() if any(k in ln for k in ("state", "pid", "last exit", "program", "path ="))]
+        print("\n".join(keep[:12]) or text[:600] or "(no answer: not installed?  run: mlauto install)")
+    except FileNotFoundError:
+        print("launchctl not found (is this a Mac?)")
+    section(f"logs in {config.autostart_log_dir}")
+    logs = sorted(Path(config.autostart_log_dir).glob("*")) if Path(config.autostart_log_dir).is_dir() else []
+    if not logs:
+        print("(no log files yet)")
+    for log in logs:
+        print(f"--- {log.name} (last 25 lines)")
+        try:
+            print("\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-25:]))
+        except OSError as exc:
+            print(f"cannot read: {exc}")
+    return 0
 
 
 def cmd_history(args, config: Config, **_) -> int:
@@ -530,127 +531,55 @@ def cmd_doctor(args, config: Config | None = None, config_error: str = "", **_) 
     results = []  # (symbol, text)
 
     ok = sys.version_info >= (3, 11)
-    results.append(
-        ("✔" if ok else "✘", f"Python {sys.version.split()[0]} (3.11 or newer needed)")
-    )
+    results.append(("✔" if ok else "✘", f"Python {sys.version.split()[0]} (3.11 or newer needed), running {sys.executable}"))
 
     if config is None:
         results.append(("✘", config_error or "configuration could not be read"))
     else:
         results.append(("✔", f"configuration: {config.path}"))
-        results.append(
-            (
-                "✔",
-                f"hotkey: {'+'.join(config.hotkey_modifiers)}+{config.hotkey_key} (used by the window in app/)",
-            )
-        )
+        results.append(("✔", f"hotkey: {'+'.join(config.hotkey_modifiers)}+{config.hotkey_key} (used by the window in app/)"))
         for folder in config.app_folders:
-            results.append(
-                (
-                    "✔" if folder.is_dir() else "!",
-                    f"app folder {folder}"
-                    + ("" if folder.is_dir() else " does not exist"),
-                )
-            )
+            results.append(("✔" if folder.is_dir() else "!", f"app folder {folder}" + ("" if folder.is_dir() else " does not exist")))
         apps = find_apps(config.app_folders, config.app_exclude)
         results.append(("✔" if apps else "!", f"{len(apps)} application(s) found"))
-        results.append(
-            (
-                "✔",
-                f"{len(config.commands)} command(s): "
-                + ", ".join(c.id for c in config.commands),
-            )
-        )
+        results.append(("✔", f"{len(config.commands)} command(s): " + ", ".join(c.id for c in config.commands)))
         exists = config.quicklinks_path.is_file()
         results.append(
-            (
-                "✔" if exists else "!",
-                f"quicklinks: {len(config.quicklinks)} in {config.quicklinks_path}"
-                + ("" if exists else " (file not found: no quicklinks)"),
-            )
+            ("✔" if exists else "!", f"quicklinks: {len(config.quicklinks)} in {config.quicklinks_path}" + ("" if exists else " (file not found: no quicklinks)"))
         )
         if config.usage_enabled:
             counts = History(config.usage_file, True).counts()
-            results.append(
-                (
-                    "✔",
-                    f"usage history on: {len(counts)} item(s) remembered in {config.usage_file}",
-                )
-            )
+            results.append(("✔", f"usage history on: {len(counts)} item(s) remembered in {config.usage_file}"))
         else:
             results.append(("✔", "usage history is switched off"))
         if config.expander_enabled:
             scan = load_snippets(config.expander_folder, config.expander_strip_cursor)
             if scan.missing_yaml:
-                results.append(
-                    (
-                        "!",
-                        "snippets: PyYAML is not installed (.venv/bin/pip install pyyaml), so Espanso snippets are off",
-                    )
-                )
+                results.append(("!", "snippets: PyYAML is not installed (.venv/bin/pip install pyyaml), so Espanso snippets are off"))
             elif not config.expander_folder.is_dir():
-                results.append(
-                    ("!", f"snippets: folder {config.expander_folder} does not exist")
-                )
+                results.append(("!", f"snippets: folder {config.expander_folder} does not exist"))
             else:
                 extra = []
                 if scan.skipped:
-                    extra.append(
-                        f"{scan.skipped} entr{'y' if scan.skipped == 1 else 'ies'} skipped (variables, forms or regex: need Espanso itself)"
-                    )
+                    extra.append(f"{scan.skipped} entr{'y' if scan.skipped == 1 else 'ies'} skipped (variables, forms or regex: need Espanso itself)")
                 if scan.duplicates:
                     extra.append(f"{scan.duplicates} duplicate trigger(s) ignored")
-                results.append(
-                    (
-                        "✔",
-                        f"snippets: {len(scan.snippets)} trigger(s) from {scan.files} file(s) in {config.expander_folder}"
-                        + "".join(f"; {e}" for e in extra),
-                    )
-                )
+                results.append(("✔", f"snippets: {len(scan.snippets)} trigger(s) from {scan.files} file(s) in {config.expander_folder}" + "".join(f"; {e}" for e in extra)))
                 for problem in scan.problems:
                     results.append(("!", f"snippets: {problem}"))
         else:
-            results.append(
-                (
-                    "✔",
-                    "snippets: not configured (set expander.folder to your Espanso folder)",
-                )
-            )
-        policy = (
-            "force quit automatically"
-            if config.kill_auto_force
-            else "asks before force quit"
-        )
-        results.append(
-            (
-                "✔",
-                f"kill: '{config.kill_word} <name>' waits {config.kill_grace_seconds} s, then {policy}",
-            )
-        )
+            results.append(("✔", "snippets: not configured (set expander.folder to your Espanso folder)"))
+        policy = "force quit automatically" if config.kill_auto_force else "asks before force quit"
+        results.append(("✔", f"kill: '{config.kill_word} <name>' waits {config.kill_grace_seconds} s, then {policy}"))
 
     root = Path(__file__).resolve().parent.parent
     for relative in ("cli/ml", "app/mylauncher-app", "app/mylauncher-autostart"):
         script = root / relative
         if script.exists() and not os.access(script, os.X_OK):
-            results.append(
-                (
-                    "!",
-                    f"{relative} is not executable (no problem with `bash {relative}`); to fix: chmod a+x {relative}",
-                )
-            )
-    for program, why in (
-        ("open", "opens applications and web pages"),
-        ("osascript", "shuts the Mac down, asks apps to quit"),
-        ("ps", "lists running apps (kill)"),
-    ):
+            results.append(("!", f"{relative} is not executable (no problem with `bash {relative}`); to fix: chmod a+x {relative}"))
+    for program, why in (("open", "opens applications and web pages"), ("osascript", "shuts the Mac down, asks apps to quit"), ("ps", "lists running apps (kill)")):
         found = shutil.which(program)
-        results.append(
-            (
-                "✔" if found else "!",
-                f"'{program}' {why}: "
-                + (found or "not found (normal if this is not a Mac)"),
-            )
-        )
+        results.append(("✔" if found else "!", f"'{program}' {why}: " + (found or "not found (normal if this is not a Mac)")))
 
     if args.json:
         _print_json([{"status": s, "text": t} for s, t in results])
@@ -668,27 +597,16 @@ def cmd_doctor(args, config: Config | None = None, config_error: str = "", **_) 
 def make_parser() -> argparse.ArgumentParser:
     # Options shared by every sub-command live in a "parent" parser, so we write them once.
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument(
-        "--config",
-        metavar="FILE",
-        help="configuration file (default: conf/myconfiguration.json)",
-    )
+    common.add_argument("--config", metavar="FILE", help="configuration file (default: conf/myconfiguration.json)")
     common.add_argument("--json", action="store_true", help="write the answer as JSON")
 
-    parser = argparse.ArgumentParser(
-        prog="mylauncher",
-        description="A small, readable launcher (command line engine).",
-    )
+    parser = argparse.ArgumentParser(prog="mylauncher", description="A small, readable launcher (command line engine).")
     parser.add_argument("--version", action="version", version=f"mylauncher {VERSION}")
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
-    sub.add_parser(
-        "list", parents=[common], help="every item the launcher knows"
-    ).set_defaults(func=cmd_list)
+    sub.add_parser("list", parents=[common], help="every item the launcher knows").set_defaults(func=cmd_list)
 
-    p = sub.add_parser(
-        "search", parents=[common], help="suggestions for what you typed"
-    )
+    p = sub.add_parser("search", parents=[common], help="suggestions for what you typed")
     p.add_argument("query", nargs="*", help="what you typed (nothing = everything)")
     p.add_argument("--limit", type=int, help="how many (default: search.max_results)")
     p.set_defaults(func=cmd_search)
@@ -697,26 +615,13 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("query", nargs="*")
     p.set_defaults(func=cmd_complete)
 
-    p = sub.add_parser(
-        "run", parents=[common], help="do the best match, or one exact --id"
-    )
+    p = sub.add_parser("run", parents=[common], help="do the best match, or one exact --id")
     p.add_argument("query", nargs="*", help="words to search; the best match is run")
-    p.add_argument(
-        "--id", help="run exactly this item, e.g. app:Obsidian or cmd:shutdown"
-    )
-    p.add_argument(
-        "--dry-run", action="store_true", help="show what would happen, do nothing"
-    )
+    p.add_argument("--id", help="run exactly this item, e.g. app:Obsidian or cmd:shutdown")
+    p.add_argument("--dry-run", action="store_true", help="show what would happen, do nothing")
     p.add_argument("--yes", action="store_true", help="do not ask for confirmation")
-    p.add_argument(
-        "--text",
-        help="what was typed in the search box (needed with --id for quicklinks and kill)",
-    )
-    p.add_argument(
-        "--force",
-        action="store_true",
-        help="(kill) force quit now, without asking the app to quit",
-    )
+    p.add_argument("--text", help="what was typed in the search box (needed with --id for quicklinks and kill)")
+    p.add_argument("--force", action="store_true", help="(kill) force quit now, without asking the app to quit")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("history", parents=[common], help="what you use most")
@@ -724,12 +629,14 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=20)
     p.set_defaults(func=cmd_history)
 
-    sub.add_parser(
-        "config", parents=[common], help="where the settings are and what they say"
-    ).set_defaults(func=cmd_config)
-    sub.add_parser(
-        "doctor", parents=[common], help="check the installation"
-    ).set_defaults(func=cmd_doctor)
+    sub.add_parser("config", parents=[common], help="where the settings are and what they say").set_defaults(func=cmd_config)
+    p = sub.add_parser("help", parents=[common], help="aliases, functions, AeroSpace keys, snippets, scripts...")
+    p.add_argument("query", nargs="*", help="a topic (aliases, functions, aerospace, espanso, skills, keys, scripts, system, launcher) and words to filter")
+    p.add_argument("--refresh", action="store_true", help="ignore the remembered answer of slow topics (aliases, system)")
+    p.set_defaults(func=cmd_help)
+
+    sub.add_parser("report", parents=[common], help="everything to paste in a problem report").set_defaults(func=cmd_report)
+    sub.add_parser("doctor", parents=[common], help="check the installation").set_defaults(func=cmd_doctor)
     return parser
 
 
@@ -741,16 +648,9 @@ def main(argv=None, runner=default_runner, ask=input, sleep=time.sleep) -> int:
         config = load_config(find_config_path(args.config))
     except ConfigError as exc:
         config_error = str(exc)
-    if config is None and args.command != "doctor":  # doctor reports the problem itself
+    if config is None and args.command not in ("doctor", "report"):  # doctor and report report the problem itself
         return _fail(args, config_error, code=2)
-    return args.func(
-        args,
-        config=config,
-        config_error=config_error,
-        runner=runner,
-        ask=ask,
-        sleep=sleep,
-    )
+    return args.func(args, config=config, config_error=config_error, runner=runner, ask=ask, sleep=sleep)
 
 
 if __name__ == "__main__":

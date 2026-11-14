@@ -28,8 +28,8 @@ class ConfigError(Exception):
 
 
 # What the window shows when an item does not choose its own emoji / label. One place to change them.
-DEFAULT_ICONS = {"app": "🚀", "command": "⚡", "prefix": "💡", "quicklink": "🔎", "kill": "💀", "snippet": "✂️"}
-KIND_LABELS = {"app": "Application", "command": "Command", "prefix": "Hint", "quicklink": "Quicklink", "kill": "Running app", "snippet": "Snippet"}
+DEFAULT_ICONS = {"app": "🚀", "command": "⚡", "prefix": "💡", "quicklink": "🔎", "kill": "💀", "snippet": "✂️", "help": "📚"}
+KIND_LABELS = {"app": "Application", "command": "Command", "prefix": "Hint", "quicklink": "Quicklink", "kill": "Running app", "snippet": "Snippet", "help": "Help"}
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,7 @@ class Item:
     complete: str = ""  # what Tab writes in the search box; empty = the title in lower case
     subtitle: str = ""  # grey extra text shown after the title (not searched), e.g. the text of a snippet
     icon: str = ""  # an emoji shown at the start of the row; empty = the default for the kind (DEFAULT_ICONS)
+    detail: str = ""  # the long text the window shows when you open a help row (function source, alias, ...)
     badge: str = ""  # small label at the end of the row; empty = the default for the kind (KIND_LABELS)
 
     def to_dict(self) -> dict:
@@ -62,6 +63,7 @@ class Item:
             "confirm": self.confirm,
             "complete": self.complete,
             "subtitle": self.subtitle,
+            "detail": self.detail,
             "icon": self.icon or DEFAULT_ICONS.get(self.kind, ""),
             "badge": self.badge or KIND_LABELS.get(self.kind, ""),
         }

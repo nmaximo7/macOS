@@ -120,3 +120,36 @@ class ResultList:
     def texts(self) -> list:
         """What the visible rows say, for tests: [(icon, title, subtitle, badge), ...]."""
         return [tuple(row[k].cget("text") for k in ("icon", "title", "subtitle", "badge")) for row in self.rows[: self.shown]]
+
+
+class DetailView:
+    """A read-only, scrollable text that takes the place of the list: the full text of a help row
+    (the source of a function, an alias with its comment, a cheat sheet...)."""
+
+    LINES = 14  # visible lines
+
+    def __init__(self, parent, theme):
+        self.frame = tk.Frame(parent, bg=theme.background)
+        self.title = tk.Label(self.frame, bg=theme.background, fg=theme.command, font=(theme.font, theme.row_size, "bold"), anchor="w")
+        self.title.pack(fill="x", padx=10, pady=(4, 2))
+        self.text = tk.Text(
+            self.frame, height=self.LINES, wrap="word", bd=0, highlightthickness=0, relief="flat", padx=10, pady=6,
+            font=("Menlo", theme.small_size + 2), bg=theme.input_background, fg=theme.text, selectbackground=theme.selection,
+            cursor="arrow",
+        )
+        self.text.pack(fill="x")
+        self.text.config(state="disabled")  # nobody types here: it is only for reading
+
+    def show(self, title: str, body: str) -> None:
+        self.title.config(text=title)
+        self.text.config(state="normal")
+        self.text.delete("1.0", "end")
+        self.text.insert("1.0", body)
+        self.text.config(state="disabled")
+        self.text.yview_moveto(0)
+
+    def scroll(self, lines: int) -> None:
+        self.text.yview_scroll(lines, "units")
+
+    def content(self) -> str:
+        return self.text.get("1.0", "end-1c")

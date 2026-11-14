@@ -31,7 +31,7 @@ from tkinter import messagebox
 from mychrome import default_style
 from mystate import LauncherState
 from mytheme import make_theme, mode_label
-from mywidgets import CommandInput, ResultList
+from mywidgets import CommandInput, DetailView, ResultList
 
 
 def bring_to_front(runner=subprocess.run, pid: int | None = None) -> None:
@@ -50,24 +50,18 @@ def bring_to_front(runner=subprocess.run, pid: int | None = None) -> None:
 
 
 HINT = "↩ open     ⇥ complete     ⎋ close"
+DETAIL_HINT = "↩ copy     ↑ ↓ scroll     ⎋ back to the list"
 
 
 class LauncherWindow:
-    def __init__(
-        self,
-        root: tk.Tk,
-        engine,
-        config,
-        front=bring_to_front,
-        confirm=messagebox.askyesno,
-        style=default_style,
-    ):
+    def __init__(self, root: tk.Tk, engine, config, front=bring_to_front, confirm=messagebox.askyesno, style=default_style):
         self.root, self.engine, self.config = root, engine, config
         self.front, self.confirm, self.style = front, confirm, style
         self.theme = make_theme(config)
         self.state = LauncherState(rows=config.max_results)
         self.visible = False
         self.styled = False
+        self.detail_item = None  # the help row whose full text is on screen (None = the list is shown)
         self._position = (0, config.window_top_offset)
         self._build()
 
@@ -78,42 +72,22 @@ class LauncherWindow:
         root.title(config.window_title)
         root.resizable(False, False)
         root.configure(bg=t.background)
-        characters = int(
-            config.window_width / (t.row_size * 0.55)
-        )  # about how many characters fit in a row
+        characters = int(config.window_width / (t.row_size * 0.55))  # about how many characters fit in a row
 
         # The "search bar": the text box (left) and the mode label (right) share one background.
         bar = tk.Frame(root, bg=t.input_background)
         bar.pack(fill="x", padx=14, pady=(8, 8))
-        self.mode = tk.Label(
-            bar,
-            text="",
-            bg=t.input_background,
-            fg=t.muted,
-            font=(t.font, t.small_size),
-            padx=10,
-        )
+        self.mode = tk.Label(bar, text="", bg=t.input_background, fg=t.muted, font=(t.font, t.small_size), padx=10)
         self.mode.pack(side="right")
         self.input = CommandInput(bar, t, on_change=lambda _text: self.refresh())
         self.input.text.pack(side="left", fill="x", expand=True)
 
-        self.list = ResultList(
-            root,
-            t,
-            rows=config.max_results,
-            characters=characters,
-            on_click=self._clicked,
-        )
+        self.list = ResultList(root, t, rows=config.max_results, characters=characters, on_click=self._clicked)
         self.list.frame.pack(fill="x", padx=14)
 
-        self.status = tk.Label(
-            root,
-            text=HINT,
-            anchor="w",
-            bg=t.background,
-            fg=t.muted,
-            font=(t.font, t.small_size),
-        )
+        self.detail = DetailView(root, t)  # not packed: it replaces the list while a help row is open
+
+        self.status = tk.Label(root, text=HINT, anchor="w", bg=t.background, fg=t.muted, font=(t.font, t.small_size))
         self.status.pack(fill="x", padx=18, pady=(6, 10))
 
         # Keys. Returning "break" tells tkinter: "I handled it, do not do your normal thing".
@@ -122,7 +96,7 @@ class LauncherWindow:
         text.bind("<Up>", lambda e: self._move(-1))
         text.bind("<Tab>", lambda e: self._autocomplete())
         text.bind("<Return>", lambda e: self._run_selected())
-        root.bind("<Escape>", lambda e: self.hide())
+        root.bind("<Escape>", lambda e: self._escape())
 
     # ---- showing and hiding ---------------------------------------------- #
 
@@ -131,19 +105,14 @@ class LauncherWindow:
         self.refresh()
         self.root.update_idletasks()
         width = self.config.window_width
-        self._position = (
-            (self.root.winfo_screenwidth() - width) // 2,
-            self.config.window_top_offset,
-        )
+        self._position = ((self.root.winfo_screenwidth() - width) // 2, self.config.window_top_offset)
         self._resize()
         self.root.deiconify()
         self.root.attributes("-topmost", True)  # above the other windows
         self.root.lift()
         if not self.styled and self.config.window_style == "borderless":
             self.root.update()  # the real (Cocoa) window must exist before we can style it
-            self.styled = bool(
-                self.style(self.config.window_title, self.theme.background)
-            )
+            self.styled = bool(self.style(self.config.window_title, self.theme.background))
         self.front()
         self.input.focus()
         self.visible = True
@@ -152,11 +121,10 @@ class LauncherWindow:
         """The window is as tall as its rows: few results, small window."""
         self.root.update_idletasks()
         x, y = self._position
-        self.root.geometry(
-            f"{self.config.window_width}x{self.root.winfo_reqheight()}+{x}+{y}"
-        )
+        self.root.geometry(f"{self.config.window_width}x{self.root.winfo_reqheight()}+{x}+{y}")
 
     def hide(self) -> None:
+        self._close_detail()
         self.root.withdraw()
         self.visible = False
 
@@ -168,6 +136,7 @@ class LauncherWindow:
     def refresh(self) -> None:
         """Ask the engine for suggestions for the current text and draw them."""
         typed = self.input.get()
+        self._close_detail()  # typing again means "back to the list"
         try:
             self.state.set_answer(self.engine.search(typed))
             self.status.config(text=HINT)
@@ -182,16 +151,41 @@ class LauncherWindow:
             import traceback
 
             traceback.print_exc()
-            self.status.config(
-                text=f"error drawing {len(self.state.results)} row(s): {exc}"
-            )
+            self.status.config(text=f"error drawing {len(self.state.results)} row(s): {exc}")
         if self.visible:
             self._resize()
 
     def _draw_list(self) -> None:
         self.list.draw(self.state.visible, self.state.visible_selected)
 
+    def _escape(self) -> None:
+        """Esc: from the full text back to the list; from the list, hide the window."""
+        if self.detail_item is not None:
+            self._close_detail()
+        else:
+            self.hide()
+
+    def _open_detail(self, item: dict) -> None:
+        self.detail_item = item
+        self.detail.show(f"{item['icon']}  {item['title']}", item["detail"])
+        self.list.frame.pack_forget()
+        self.detail.frame.pack(fill="x", padx=14, before=self.status)
+        self.status.config(text=DETAIL_HINT)
+        self._resize()
+
+    def _close_detail(self) -> None:
+        if self.detail_item is None:
+            return
+        self.detail_item = None
+        self.detail.frame.pack_forget()
+        self.list.frame.pack(fill="x", padx=14, before=self.status)
+        self.status.config(text=HINT)
+        self._resize()
+
     def _move(self, step: int) -> str:
+        if self.detail_item is not None:  # the arrows scroll the text instead of moving in the list
+            self.detail.scroll(step * 3)
+            return "break"
         self.state.move(step)
         self._draw_list()  # scrolling changes which rows are shown, so draw them again
         return "break"
@@ -208,25 +202,20 @@ class LauncherWindow:
         return "break"  # without this, Tab would jump to another widget
 
     def _run_selected(self) -> str:
-        item = self.state.current
+        item = self.detail_item if self.detail_item is not None else self.state.current
         if item is None:
             return "break"
-        if (
-            item["kind"] == "prefix"
-        ):  # a hint ("yt", "kill", ";p"): there is nothing to run yet, so write it and wait
+        if item["kind"] == "help" and self.detail_item is None and item.get("detail"):
+            self._open_detail(item)  # first Enter: read it; the next Enter copies it (below)
+            return "break"
+        if item["kind"] == "prefix":  # a hint ("yt", "kill", ";p"): there is nothing to run yet, so write it and wait
             self.input.set(item["complete"])
             return "break"
-        if item["confirm"] and not self.confirm(
-            self.config.window_title,
-            f"{item['title']}: are you sure?",
-            parent=self.root,
-        ):
+        if item["confirm"] and not self.confirm(self.config.window_title, f"{item['title']}: are you sure?", parent=self.root):
             return "break"
         typed = self.input.get()
         result = self.engine.run(item["id"], typed)
-        if (
-            result.needs_force
-        ):  # an app did not quit: only force quit if the user agrees
+        if result.needs_force:  # an app did not quit: only force quit if the user agrees
             question = f"{result.message}\n\nForce quit now?"
             if self.confirm(self.config.window_title, question, parent=self.root):
                 result = self.engine.run(item["id"], typed, force=True)

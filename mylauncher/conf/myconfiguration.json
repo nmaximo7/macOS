@@ -1,6 +1,8 @@
 {
   "hotkey": {
-    "modifiers": ["command"],
+    "modifiers": [
+      "command"
+    ],
     "key": "d",
     "swallow": true
   },
@@ -21,7 +23,11 @@
     }
   },
   "browser": {
-    "command": ["/Applications/Zen.app/Contents/MacOS/zen", "-new-tab", "{url}"]
+    "command": [
+      "/Applications/Zen.app/Contents/MacOS/zen",
+      "-new-tab",
+      "{url}"
+    ]
   },
   "autostart": {
     "label": "com.mylauncher.app",
@@ -35,11 +41,33 @@
     "notification": true,
     "group_length": 2,
     "groups": {
-      ";p": { "name": "prompts", "icon": "🧠" },
-      ";e": { "name": "emoji", "icon": "😀" },
-      ";b": { "name": "bookmarks", "icon": "🔖" },
-      ";h": { "name": "code", "icon": "💻" }
+      ";p": {
+        "name": "prompts",
+        "icon": "🧠"
+      },
+      ";e": {
+        "name": "emoji",
+        "icon": "😀"
+      },
+      ";b": {
+        "name": "bookmarks",
+        "icon": "🔖"
+      },
+      ";h": {
+        "name": "code",
+        "icon": "💻"
+      }
     }
+  },
+  "help": {
+    "word": "help",
+    "aliases_file": "~/.zsh_aliases",
+    "functions_file": "~/.zsh_functions",
+    "aerospace_config": "~/.config/aerospace/aerospace.toml",
+    "skills_folder": "~/macOS/claude/skills",
+    "help_script": "~/macOS/scripts/help.sh",
+    "scripts_folder": "~/macOS/scripts",
+    "cache_seconds": 600
   },
   "apps": {
     "word": "run",
@@ -62,7 +90,11 @@
       "id": "shutdown",
       "title": "Shutdown",
       "action": "shutdown",
-      "keywords": ["shut down", "power off", "turn off"],
+      "keywords": [
+        "shut down",
+        "power off",
+        "turn off"
+      ],
       "confirm": true,
       "icon": "🔌",
       "description": "Turn the Mac off (asks first)"

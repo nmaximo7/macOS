@@ -114,6 +114,24 @@ class SnippetBrowse(BrowseCase):
         self.assertIn("group:;eh", ids)
 
 
+class SnippetProblems(BrowseCase):
+    def test_missing_pyyaml_is_explained_in_the_list(self):
+        with mock.patch("myexpander.yaml_loader", return_value=None):
+            row = self.search(";")["results"][0]
+        self.assertEqual((row["id"], row["icon"]), ("info:snippets", "⚠️"))
+        self.assertIn("pip install pyyaml", row["subtitle"])
+
+    def test_missing_folder_is_explained(self):
+        self.config = str(self.write_config(support.good_config([self.tmp / "Applications"], expander={"folder": str(self.tmp / "nope")})))
+        row = self.search(";p")["results"][0]
+        self.assertEqual(row["title"], "No snippets found")
+        self.assertIn("folder not found", row["subtitle"])
+
+    def test_the_explanation_row_does_not_run(self):
+        code, _, _ = self.call("run", "--id", "info:snippets", "--yes", "--json")
+        self.assertNotEqual(code, 0)
+
+
 class Modes(BrowseCase):
     def test_kill_mode_and_quicklink_mode_report_their_highlight(self):
         self.write_quicklinks([{"keyword": "yt", "url": "https://y.example/?q={query}"}])

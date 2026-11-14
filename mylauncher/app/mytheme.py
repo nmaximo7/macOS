@@ -14,6 +14,7 @@ MODE_LABELS = {
     "kill": "💀 Close an app",
     "quicklink": "🔎 Web search",
     "snippets": "✂️ Snippets",
+    "help": "📚 Help",
 }
 
 

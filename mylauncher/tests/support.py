@@ -24,6 +24,8 @@ def good_config(folders=(), **changes) -> dict:
         "search": {"max_results": 8, "ignore_accents": True, "fuzzy": True},
         # History OFF by default, so no test can ever write into the real ~/Library (tests that need it switch it on with a tmp file).
         "usage": {"enabled": False},
+        # No help answers are remembered in tests (the cache lives in the real ~/Library otherwise).
+        "help": {"cache_seconds": 0},
         "commands": [
             {"id": "shutdown", "title": "Shutdown", "action": "shutdown", "keywords": ["power off"], "confirm": True}
         ],
@@ -63,7 +65,8 @@ class TempDirCase(unittest.TestCase):
 class FakeRunner:
     """Replaces "really run a command": it only remembers what it was asked to run."""
 
-    def __init__(self, returncode: int = 0, stderr: str = "", error: Exception | None = None):
+    def __init__(self, returncode: int = 0, stderr: str = "", error: Exception | None = None, outputs: dict | None = None):
+        self.outputs = outputs or {}  # {("zsh", "-ic", "alias"): "ll='ls -la'\n"}: what a command prints
         self.calls, self.inputs = [], []  # inputs = the text sent to a command's standard input (pbcopy)
         self.returncode, self.stderr, self.error = returncode, stderr, error
 
@@ -75,7 +78,7 @@ class FakeRunner:
             raise self.error
         from types import SimpleNamespace
 
-        return SimpleNamespace(returncode=self.returncode, stderr=self.stderr, stdout="")
+        return SimpleNamespace(returncode=self.returncode, stderr=self.stderr, stdout=self.outputs.get(tuple(command), ""))
 
 
 class FakeSystem:

@@ -279,6 +279,53 @@ class Look(Window):
         self.assertLess(len(self.window.list.texts()[0][2]), 100)
         self.assertTrue(self.window.list.texts()[0][2].endswith("…"))
 
+    HELP_ROW = {"id": "help:functions:deploy", "title": "deploy", "kind": "help", "confirm": False, "complete": "", "icon": "🧩",
+                "badge": "Function", "subtitle": "rsync", "detail": "# Deploys\ndeploy() {\n  rsync\n}"}
+
+    def test_enter_on_a_help_row_opens_the_full_text_and_enter_again_copies(self):
+        self.engine.ITEMS = [self.HELP_ROW]
+        self.window.show()
+        self.window._run_selected()
+        self.assertIs(self.window.detail_item, self.window.state.current)
+        self.assertEqual(self.window.detail.content(), "# Deploys\ndeploy() {\n  rsync\n}")
+        self.assertFalse(self.window.list.frame.winfo_ismapped() and self.window.list.frame.winfo_manager())
+        self.assertEqual(self.engine.ran, [])  # nothing copied yet
+        self.window._run_selected()
+        self.assertEqual(self.engine.ran, ["help:functions:deploy"])
+        self.assertFalse(self.window.visible)
+
+    def test_escape_goes_back_to_the_list_and_then_hides(self):
+        self.engine.ITEMS = [self.HELP_ROW]
+        self.window.show()
+        self.window._run_selected()
+        self.window._escape()
+        self.assertIsNone(self.window.detail_item)
+        self.assertEqual(self.window.list.frame.winfo_manager(), "pack")
+        self.assertTrue(self.window.visible)
+        self.window._escape()
+        self.assertFalse(self.window.visible)
+
+    def test_typing_closes_the_full_text(self):
+        self.engine.ITEMS = [self.HELP_ROW]
+        self.window.show()
+        self.window._run_selected()
+        self.window.input.set("help")
+        self.assertIsNone(self.window.detail_item)
+
+    def test_arrows_scroll_the_full_text_instead_of_moving_the_selection(self):
+        self.engine.ITEMS = [dict(self.HELP_ROW, detail="\n".join(f"line {i}" for i in range(100)))]
+        self.window.show()
+        self.window._run_selected()
+        self.window._move(+1)
+        self.assertGreater(self.window.detail.text.yview()[0], 0)
+        self.assertEqual(self.window.state.selected, 0)
+
+    def test_a_help_row_without_detail_is_just_run(self):
+        self.engine.ITEMS = [dict(self.HELP_ROW, detail="")]
+        self.window.show()
+        self.window._run_selected()
+        self.assertEqual(self.engine.ran, ["help:functions:deploy"])
+
     def test_enter_on_a_snippet_group_writes_the_group(self):
         self.engine.ITEMS = [{"id": "group:;p", "title": ";p  prompts", "kind": "prefix", "confirm": False, "complete": ";p", "icon": "🧠", "badge": "Group", "subtitle": "3 snippet(s)"}]
         self.window.show()

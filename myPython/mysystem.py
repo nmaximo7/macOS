@@ -62,6 +62,15 @@ def _emit(payload: Any, as_json: bool, pretty: bool = True) -> None:
 # --------------------------------------------------------------------------- #
 # System info
 # --------------------------------------------------------------------------- #
+def _disk_space(path: str) -> str:
+    try:
+        usage = shutil.disk_usage(path)
+        gib = 1024**3
+        return f"Total: {usage.total / gib:.2f} GB, Used: {usage.used / gib:.2f} GB, Free: {usage.free / gib:.2f} GB"
+    except OSError:
+        return "unavailable (path may be missing or not mounted)"
+
+
 def get_sys_info(as_json: bool = False) -> dict[str, str]:
     """Return read-only system metrics. Also prints unless as_json."""
     try:
@@ -74,7 +83,9 @@ def get_sys_info(as_json: bool = False) -> dict[str, str]:
         "OS_Version": _safe_version("sw_vers -productVersion"),
         "Architecture": _safe_version("uname -m"),
         "RAM": ram,
-        "Disk_Free": f"{shutil.disk_usage('/').free / (1024**3):.2f} GB",
+        "Disk / (Macintosh HD)": _disk_space("/"),
+        "Disk /Volumes/MacDatosMaster": _disk_space("/Volumes/MacDatosMaster"),
+        "Disk /Volumes/DatosSlave": _disk_space("/Volumes/DatosSlave"),
         "Zsh_Version": _safe_version("zsh --version"),
         "AeroSpace": _safe_version("aerospace --version"),
     }

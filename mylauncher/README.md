@@ -3,7 +3,7 @@
 A small launcher for macOS in the spirit of Raycast or Alfred, built **slowly, in Python, for learning**.
 Press a hotkey (default **Command+D**), type, see suggestions, press Enter.
 
-> Status: **step 6 of N**. Step 6: Raycast-like window, `run`/`;` lists, hotkey swallowed, searches in a new Zen tab. Engine, command line, tkinter window, Command+D hotkey, start at login, most-used-first, quicklinks, `kill`, the menu bar icon and Espanso snippets are built; see `docs/04-journal.md`.
+> Status: **step 7 of N**. Step 7: `help` (aliases, functions, AeroSpace keys, scripts...), `ml report`, troubleshooting guide. Step 6: Raycast-like window, `run`/`;` lists, hotkey swallowed, searches in a new Zen tab. Engine, command line, tkinter window, Command+D hotkey, start at login, most-used-first, quicklinks, `kill`, the menu bar icon and Espanso snippets are built; see `docs/04-journal.md`.
 
 ## Layout
 
@@ -12,7 +12,7 @@ Press a hotkey (default **Command+D**), type, see suggestions, press Enter.
 | `conf/` | `myconfiguration.json`: the settings (hotkey, folders with apps, commands, search options, kill, usage, menu bar, Espanso folder) and `quicklinks.json`: your web searches |
 | `cli/`  | The engine, as command-line scripts. Everything the launcher does can be done here |
 | `app/`  | The tkinter window and the global hotkey. It only *calls* `cli/` |
-| `docs/` | `01-installation.md`, `02-use.md`, `03-implementation.md`, `04-journal.md` |
+| `docs/` | `01-installation.md`, `02-use.md`, `03-implementation.md`, `04-journal.md`, `05-troubleshooting.md` |
 | `tests/`| Automated tests (`python3 -m unittest discover -s tests`) |
 
 ## Try it in 30 seconds
@@ -24,6 +24,8 @@ cli/ml search obs        # -> Run Obsidian
 cli/ml run obs --dry-run # shows what it WOULD do, does nothing
 cli/ml run obs           # opens Obsidian
 cli/ml search yt lofi    # a quicklink: keyword, space, query
+cli/ml help aliases      # your aliases (also: functions, aerospace, scripts...)
+cli/ml report            # everything to paste in a problem report
 cli/ml run kill textedit --dry-run   # what closing TextEdit would do
 ```
 
