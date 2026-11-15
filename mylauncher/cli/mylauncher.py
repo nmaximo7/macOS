@@ -38,7 +38,9 @@ import argparse
 import dataclasses
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -46,9 +48,12 @@ from pathlib import Path
 from myactions import RunOptions, default_runner, default_spawn, run_item
 from myapps import find_apps
 from myconfig import Config, ConfigError, find_config_path, load_config
+import myespanso
 from myexpander import describe_groups, group_of, load_snippets, preview
 from myedit import build_edit_items
 from myexecute import build_execute_items
+from mysecret import add_name, build_secret_items, edit_item, file_problems, read_secrets
+from mynotify import resolve as resolve_notifier, send as send_notification
 from myhelp import TOPICS, help_end, help_search
 from myhistory import History
 from mykill import running_apps
@@ -56,7 +61,7 @@ from myquicklinks import build_url
 from mysearch import complete, rank, split_prefix
 from mytypes import Item, Match
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 
 SCORE_MODE = 200  # a quicklink you have already started typing a query for beats everything else
 
@@ -96,6 +101,30 @@ def build_items(config: Config) -> list:
             complete=f"{config.kill_word} ",
             subtitle="Quits the app; force quit if it does not answer",
             icon="💀",
+        )
+    )
+    items.append(
+        Item(
+            id=f"prefix:{config.secret_word}",
+            title=f"Show your secrets ({config.secret_word})",
+            kind="prefix",
+            action="prefix_hint",
+            keywords=(config.secret_word, "api key", "token", "password"),
+            complete=f"{config.secret_word} ",
+            subtitle="Values hidden; Enter shows one, Enter again copies it",
+            icon="🔑",
+        )
+    )
+    items.append(
+        Item(
+            id=f"prefix:{config.secret_edit_word}",
+            title=f"Edit the secret file ({config.secret_edit_word})",
+            kind="prefix",
+            action="prefix_hint",
+            keywords=(config.secret_edit_word, "secret", "api key", "token"),
+            complete=config.secret_edit_word,
+            subtitle="Opens the file of secrets in your editor",
+            icon="🔐",
         )
     )
     items.append(
@@ -232,7 +261,7 @@ def detect_mode(config: Config, query: str) -> tuple:
     """(mode, n): what the launcher understood and how many characters at the start of the query
     make up the recognised command (the window paints them in colour).
 
-    mode is one of: "normal", "run", "kill", "help", "edit", "execute", "quicklink", "snippets".
+    mode is one of: "normal", "run", "kill", "help", "edit", "execute", "secret", "keep_secret", "quicklink", "snippets".
     """
     text = query.lstrip()
     lead = len(query) - len(text)
@@ -244,6 +273,10 @@ def detect_mode(config: Config, query: str) -> tuple:
         return "kill", lead + len(word)
     if word == config.help_word:
         return "help", lead + help_end(config, text)
+    if word == config.secret_word:
+        return "secret", lead + len(word)
+    if word == config.secret_edit_word:
+        return "keep_secret", lead + len(word)
     if word == config.edit_word:
         return "edit", lead + len(word)
     if word == config.execute_word:
@@ -304,6 +337,16 @@ def _search(config: Config, query: str, limit: int | None = None, runner=default
     if mode == "help":
         return help_search(config, query, runner, **options)
 
+    if mode == "keep_secret":
+        return [Match(edit_item(config), 100)]
+
+    if mode == "secret":  # names and comments are searched, never the values
+        items = build_secret_items(config, runner)
+        if not rest.strip():
+            return [Match(i, 100) for i in items[: config.max_browse_results]]
+        found = rank([i for i in items if (i.kind == "secret" and i.id != "secret:*all*") or i.id.startswith("secret-problem:")], rest, config.max_browse_results, **{**options, "fuzzy": False})
+        return found  # nothing found: an empty list (a value is never searched)
+
     if mode in ("edit", "execute"):  # the lists of edit.json / execute.json, filtered by what follows the word
         items = build_edit_items(config) if mode == "edit" else build_execute_items(config)
         if not rest.strip():  # nothing typed yet: the order of the file
@@ -340,7 +383,14 @@ def _search(config: Config, query: str, limit: int | None = None, runner=default
     items = build_items(config)
     if query.strip():  # snippets can be many: they appear only when you type something
         items += build_snippet_items(config)
-    return rank(items, query, limit, **options)
+    matches = rank(items, query, limit, **options)
+    # Two or more letters that start one of the command words ("exe", "ed", "sec") put that word first, so Tab completes it.
+    typed = query.strip().lower()
+    if len(typed) >= 2 and " " not in typed:
+        words = [m for m in matches if m.item.kind == "prefix" and m.item.complete.strip().lower().startswith(typed)]
+        words.sort(key=lambda m: len(m.item.complete))
+        matches = words + [m for m in matches if m not in words]
+    return matches
 
 
 def _print_json(data) -> None:
@@ -438,6 +488,9 @@ def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.s
         auto_force=config.kill_auto_force,
         sleep=sleep,
         notify=config.expander_notify,
+        copy_log=config.expander_copy_log,
+        notify_method=config.notify_method,
+        clear_seconds=config.secret_clear_seconds,
         browser_command=config.browser_command,
         editor_command=config.edit_editor,
         shell=config.execute_shell,
@@ -450,11 +503,14 @@ def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.s
     result = run_item(item, runner=runner, dry_run=args.dry_run, options=options)
 
     # 4. Remember it (for "most used first"), but only real, successful runs of real items.
-    if result.ok and not args.dry_run and item.kind not in ("prefix", "help"):
+    if result.ok and not args.dry_run and item.kind not in ("prefix", "help", "secret"):
         History(config.usage_file, config.usage_enabled).record(item.id)
 
     if args.json:
-        _print_json({"item": item.to_dict(), "result": result.to_dict()})
+        shown = item.to_dict()
+        if item.kind == "secret":  # the value must not travel in the output
+            shown.update(target="(hidden)", detail="(hidden)")
+        _print_json({"item": shown, "result": result.to_dict()})
     else:
         print(f"{item.title}: {result.message}")
     return 0 if result.ok else 1
@@ -479,6 +535,61 @@ def cmd_help(args, config: Config, runner=default_runner, **_) -> int:
     if len(matches) == 1 and matches[0].item.kind == "help":  # exactly one row: show everything about it
         print("\n" + matches[0].item.detail)
     return 0
+
+
+NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+
+
+def cmd_secret_set(args, config: Config, **_) -> int:
+    """ml secret-set NAME: save a value in the macOS Keychain (the program `security` asks for it, hidden) and list the name."""
+    name = args.name.strip()
+    if not NAME_RE.match(name):
+        print(f"error: {name!r} is not a good name (letters, digits, _ . -)", file=sys.stderr)
+        return 2
+    command = ["security", "add-generic-password", "-U", "-s", config.secret_service, "-a", name, "-w"]  # -w last: it asks, hidden
+    print(f"Saving {name} in the Keychain (service {config.secret_service}). Type or paste the value when asked (it is hidden).")
+    try:
+        code = subprocess.run(command, check=False).returncode
+    except FileNotFoundError:
+        print("error: the program 'security' was not found (is this a Mac?)", file=sys.stderr)
+        return 1
+    if code != 0:
+        print(f"error: the Keychain did not save it (exit code {code})", file=sys.stderr)
+        return 1
+    added = add_name(config.secret_file, name)
+    print("Saved." + (f" Added {name}=keychain to {config.secret_file}." if added else ""))
+    return 0
+
+
+def cmd_espanso_config(args, config: Config, **_) -> int:
+    """ml espanso-config [--install]: keep Espanso from expanding triggers typed INTO the launcher window."""
+    text = myespanso.config_text(config.window_title)
+    if args.install:
+        ok, message = myespanso.install(config.expander_folder, config.window_title)
+        print(message, file=sys.stdout if ok else sys.stderr)
+        return 0 if ok else 1
+    folder = myespanso.config_dir(config.expander_folder)
+    print(f"Put this in {(folder / myespanso.FILE_NAME) if folder else '<espanso folder>/config/' + myespanso.FILE_NAME}\n(or let me do it: ml espanso-config --install)\n")
+    print(text)
+    return 0
+
+
+def cmd_notify_test(args, config: Config, runner=default_runner, **_) -> int:
+    """Send a test notification and explain what to check when it does not appear."""
+    name, path = resolve_notifier(config.notify_method)
+    print(f"method: {config.notify_method}  ->  using {name}" + (f" ({path})" if path else ""))
+    ok, detail = send_notification(runner, config.notify_method, "mylauncher", "Test", "If you can read this, notifications work.")
+    print(f"{'sent' if ok else 'FAILED'}: {detail}")
+    if name == "osascript":
+        print("\nosascript says 'ok' even when macOS hides the notification. If you see nothing:")
+        print("  1. brew install terminal-notifier   (then run this again: it is used automatically, and the")
+        print("     first time macOS adds 'terminal-notifier' to System Settings > Notifications: allow it)")
+        print("  2. check Focus / Do Not Disturb is off (menu bar, Control Centre)")
+        print("  3. System Settings > Notifications > Script Editor: Allow, style Banners or Alerts")
+    elif name == "terminal-notifier":
+        print("\nIf you see nothing: System Settings > Notifications > terminal-notifier: Allow, and Focus off.")
+    print("\nThe launcher window also shows its own message after an action (notifications.toast).")
+    return 0 if ok else 1
 
 
 def cmd_report(args, config: Config | None = None, config_error: str = "", runner=default_runner, **_) -> int:
@@ -603,6 +714,16 @@ def cmd_doctor(args, config: Config | None = None, config_error: str = "", **_) 
         missing = [i.title for i in build_edit_items(config) if i.badge == "Missing"]
         if missing:
             results.append(("!", f"edit: {len(missing)} file(s) do not exist: " + ", ".join(missing[:5]) + (" ..." if len(missing) > 5 else "")))
+        secrets, problem = read_secrets(config.secret_file)
+        if problem:
+            results.append(("!", f"secret: {problem} ({config.secret_file}); type {config.secret_edit_word} to create it"))
+        else:
+            results.append(("✔", f"secret: {len(secrets)} entr{'y' if len(secrets) == 1 else 'ies'} in {config.secret_file}"))
+        for warning in file_problems(config.secret_file):
+            results.append(("!", f"secret file is {warning}"))
+        method, found = resolve_notifier(config.notify_method)
+        extra = "" if method != "osascript" else " (unreliable on recent macOS: brew install terminal-notifier, then ml notify-test)"
+        results.append(("✔" if method != "osascript" else "!", f"notifications: {method}{extra}"))
         if config.usage_enabled:
             counts = History(config.usage_file, True).counts()
             results.append(("✔", f"usage history on: {len(counts)} item(s) remembered in {config.usage_file}"))
@@ -623,6 +744,12 @@ def cmd_doctor(args, config: Config | None = None, config_error: str = "", **_) 
                 results.append(("✔", f"snippets: {len(scan.snippets)} trigger(s) from {scan.files} file(s) in {config.expander_folder}" + "".join(f"; {e}" for e in extra)))
                 for problem in scan.problems:
                     results.append(("!", f"snippets: {problem}"))
+                ok, message = myespanso.status(config.expander_folder, config.window_title)
+                results.append(("✔" if ok else "!", message))
+                for note in scan.skipped_notes[:10]:
+                    results.append(("!", f"snippet skipped: {note}"))
+                if len(scan.skipped_notes) > 10:
+                    results.append(("!", f"... and {len(scan.skipped_notes) - 10} more skipped snippets"))
         else:
             results.append(("✔", "snippets: not configured (set expander.folder to your Espanso folder)"))
         policy = "force quit automatically" if config.kill_auto_force else "asks before force quit"
@@ -686,6 +813,13 @@ def make_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_history)
 
     sub.add_parser("config", parents=[common], help="where the settings are and what they say").set_defaults(func=cmd_config)
+    secret_set = sub.add_parser("secret-set", parents=[common], help="save a secret in the macOS Keychain and list it in the secret file")
+    secret_set.add_argument("name", help="e.g. OPENROUTER_API_KEY")
+    secret_set.set_defaults(func=cmd_secret_set)
+    espanso = sub.add_parser("espanso-config", parents=[common], help="keep Espanso from expanding triggers typed into the launcher")
+    espanso.add_argument("--install", action="store_true", help="write the file into Espanso's config folder")
+    espanso.set_defaults(func=cmd_espanso_config)
+    sub.add_parser("notify-test", parents=[common], help="send a test notification and explain what to check").set_defaults(func=cmd_notify_test)
     p = sub.add_parser("help", parents=[common], help="aliases, functions, AeroSpace keys, snippets, scripts...")
     p.add_argument("query", nargs="*", help="a topic (aliases, functions, aerospace, espanso, skills, keys, scripts, system, launcher) and words to filter")
     p.add_argument("--refresh", action="store_true", help="ignore the remembered answer of slow topics (aliases, system)")

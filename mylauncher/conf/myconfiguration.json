@@ -39,6 +39,8 @@
     "folder": "~/macOS/Espanso/Library/Application Support",
     "strip_cursor_marker": true,
     "notification": true,
+    "paste": true,
+    "paste_delay_ms": 250,
     "group_length": 2,
     "groups": {
       ";p": {
@@ -57,7 +59,8 @@
         "name": "code",
         "icon": "💻"
       }
-    }
+    },
+    "copy_log": "~/Library/Logs/mylauncher/copy.log"
   },
   "help": {
     "word": "help",
@@ -128,5 +131,18 @@
       "icon": "🔌",
       "description": "Turn the Mac off (asks first)"
     }
-  ]
+  ],
+  "notifications": {
+    "method": "auto",
+    "toast": false,
+    "toast_seconds": 2.0
+  },
+  "secret": {
+    "word": "secret",
+    "edit_word": "keep_secret",
+    "file": "~/.config/mylauncher/secrets.env",
+    "clear_seconds": 30,
+    "reveal_chars": 4,
+    "keychain_service": "justtothepoint-toolkit"
+  }
 }

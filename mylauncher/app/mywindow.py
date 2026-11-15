@@ -31,7 +31,18 @@ from tkinter import messagebox
 from mychrome import default_style
 from mystate import LauncherState
 from mytheme import make_theme, mode_label
+from mytoast import Toast
 from mywidgets import CommandInput, DetailView, ResultList
+
+
+def press_command_v() -> None:
+    """Type Command+V into whatever application is in front (pynput is already needed for the hotkey)."""
+    from pynput.keyboard import Controller, Key
+
+    keyboard = Controller()
+    with keyboard.pressed(Key.cmd):
+        keyboard.press("v")
+        keyboard.release("v")
 
 
 def bring_to_front(runner=subprocess.run, pid: int | None = None) -> None:
@@ -49,18 +60,21 @@ def bring_to_front(runner=subprocess.run, pid: int | None = None) -> None:
         pass  # not on a Mac, or too slow: fine
 
 
+# After these kinds of rows the window says what happened (a copy, a started command...); opening an app needs no message.
+TOAST_KINDS = ("snippet", "help", "secret", "execute", "edit", "kill")
 HINT = "↩ open     ⇥ complete     ⎋ close"
 DETAIL_HINT = "↩ copy     ↑ ↓ scroll     ⎋ back to the list"
 
 
 class LauncherWindow:
-    def __init__(self, root: tk.Tk, engine, config, front=bring_to_front, confirm=messagebox.askyesno, style=default_style):
+    def __init__(self, root: tk.Tk, engine, config, front=bring_to_front, confirm=messagebox.askyesno, style=default_style, paste=press_command_v):
         self.root, self.engine, self.config = root, engine, config
-        self.front, self.confirm, self.style = front, confirm, style
+        self.front, self.confirm, self.style, self.paste = front, confirm, style, paste
         self.theme = make_theme(config)
         self.state = LauncherState(rows=config.max_results)
         self.visible = False
         self.styled = False
+        self.toast = Toast(root, self.theme, config.toast_seconds, config.window_top_offset) if config.toast else None
         self.detail_item = None  # the help row whose full text is on screen (None = the list is shown)
         self._position = (0, config.window_top_offset)
         self._build()
@@ -201,11 +215,19 @@ class LauncherWindow:
             self.input.set(wanted)
         return "break"  # without this, Tab would jump to another widget
 
+    def _paste(self) -> None:
+        """The text is on the clipboard and the window is gone: press Command+V where the user was typing."""
+        try:
+            self.paste()
+            print("[run] pasted (Command+V)", flush=True)
+        except Exception as exc:  # noqa: BLE001 - a failed paste leaves the text on the clipboard: say so, do not crash
+            print(f"[run] could not paste ({type(exc).__name__}: {exc}); the text is on the clipboard", flush=True)
+
     def _run_selected(self) -> str:
         item = self.detail_item if self.detail_item is not None else self.state.current
         if item is None:
             return "break"
-        if item["kind"] == "help" and self.detail_item is None and item.get("detail"):
+        if item["kind"] in ("help", "secret") and self.detail_item is None and item.get("detail"):
             self._open_detail(item)  # first Enter: read it; the next Enter copies it (below)
             return "break"
         if item["kind"] == "prefix":  # a hint ("yt", "kill", ";p"): there is nothing to run yet, so write it and wait
@@ -214,13 +236,21 @@ class LauncherWindow:
         if item["confirm"] and not self.confirm(self.config.window_title, f"{item['title']}: are you sure?", parent=self.root):
             return "break"
         typed = self.input.get()
+        print(f"[run] {item['id']} ...", flush=True)  # the log shows how far an action got
         result = self.engine.run(item["id"], typed)
+        print(f"[run] {item['id']} -> {'ok' if result.ok else 'error'}: {result.message[:80]}", flush=True)
         if result.needs_force:  # an app did not quit: only force quit if the user agrees
             question = f"{result.message}\n\nForce quit now?"
             if self.confirm(self.config.window_title, question, parent=self.root):
                 result = self.engine.run(item["id"], typed, force=True)
         if result.ok:
             self.hide()
+            print("[run] window hidden", flush=True)
+            if item["kind"] == "snippet" and self.config.expander_paste:
+                self.root.after(self.config.expander_paste_delay_ms, self._paste)
+            if self.toast and item["kind"] in TOAST_KINDS and result.message:
+                self.toast.show(f"✔  {result.message}")
+                print("[run] toast shown", flush=True)
         else:
             self.status.config(text=f"error: {result.message}")
         return "break"

@@ -26,6 +26,7 @@ from pathlib import Path
 from myactions import COMMAND_ACTIONS
 from myedit import load_edit
 from myexecute import DEFAULT_SHELL, DEFAULT_SOURCE, DEFAULT_TERMINAL_COMMAND, load_execute
+from mynotify import METHODS as NOTIFY_METHODS
 from myquicklinks import load_quicklinks
 from mytypes import ConfigError  # defined in mytypes.py; imported here so "from myconfig import ConfigError" keeps working
 
@@ -92,7 +93,10 @@ class Config:
     expander_enabled: bool = False  # True when expander.folder is set (and expander.enabled is not false)
     expander_folder: Path = Path("")  # where the Espanso .yml files are (searched in all subfolders)
     expander_strip_cursor: bool = True  # remove Espanso's cursor marker $|$ from the copied text
+    expander_paste: bool = True  # after copying a snippet, press Command+V in the application you came from (what Espanso did)
+    expander_paste_delay_ms: int = 250
     expander_notify: bool = True  # show a macOS notification when a snippet is copied
+    expander_copy_log: Path | None = Path("~/Library/Logs/mylauncher/copy.log").expanduser()  # one line per copy ("" = no log)
     expander_group_length: int = 2  # ";pclarify" belongs to the group ";p" (this many first characters)
     expander_groups: dict = field(default_factory=dict)  # {";p": ("bookmark", "🔖")} names/icons of the groups
     hotkey_swallow: bool = True  # True: the application in front does not receive the hotkey
@@ -123,6 +127,15 @@ class Config:
     execute_terminal_command: tuple = DEFAULT_TERMINAL_COMMAND  # {command} is replaced by the script
     execute_log_dir: Path = Path("~/Library/Logs/mylauncher/execute").expanduser()
     execute_notify: bool = True  # background commands: a notification says how they ended
+    secret_word: str = "secret"  # lists the secrets (values hidden)
+    secret_edit_word: str = "keep_secret"  # opens the secret file in the editor
+    secret_file: Path = Path("~/.config/mylauncher/secrets.env").expanduser()  # outside the repository!
+    secret_clear_seconds: int = 30  # the clipboard is emptied this long after copying a secret (0 = never)
+    secret_service: str = "justtothepoint-toolkit"  # Keychain service name (the one openrouter.py --set-key uses)
+    secret_reveal: int = 4  # how many last characters of a value stay visible in the list (0 = none)
+    notify_method: str = "auto"  # auto, osascript, terminal-notifier, none
+    toast: bool = False  # OFF by default (step 9f): an extra Cocoa window; the macOS notification is the reliable message. The launcher's own little message after an action (works without any macOS permission)
+    toast_seconds: float = 2.0
     browser_command: tuple = ()  # how to open a web address, with {url}; empty = the macOS default (open)
 
 
@@ -158,7 +171,7 @@ def load_config(path: Path) -> Config:
         raise ConfigError(f"{path} is not valid JSON (line {exc.lineno}, column {exc.colno}): {exc.msg}") from None
     config = parse_config(data, path)
     # The quicklinks live in their own file (conf/quicklinks.json); the keyword of the "kill" mode is reserved.
-    reserved = (config.kill_word, config.run_word, config.help_word, config.edit_word, config.execute_word)
+    reserved = (config.kill_word, config.run_word, config.help_word, config.edit_word, config.execute_word, config.secret_word, config.secret_edit_word)
     links = load_quicklinks(config.quicklinks_path, reserved=reserved)
     return replace(
         config, quicklinks=links, edit_entries=load_edit(config.edit_path), execute_entries=load_execute(config.execute_path)
@@ -329,6 +342,12 @@ def parse_config(data, path: Path) -> Config:
     expander_enabled = _check(expander.get("enabled", True), bool, "expander.enabled") and bool(folder_text.strip())
     strip_cursor = _check(expander.get("strip_cursor_marker", True), bool, "expander.strip_cursor_marker")
     notify = _check(expander.get("notification", True), bool, "expander.notification")
+    paste = _check(expander.get("paste", True), bool, "expander.paste")
+    paste_delay = _check(expander.get("paste_delay_ms", 250), int, "expander.paste_delay_ms")
+    if paste_delay < 0:
+        raise ConfigError("expander.paste_delay_ms cannot be negative")
+    copy_log_text = _check(expander.get("copy_log", "~/Library/Logs/mylauncher/copy.log"), str, "expander.copy_log")
+    copy_log = Path(copy_log_text).expanduser() if copy_log_text.strip() else None
 
     group_length = _check(expander.get("group_length", 2), int, "expander.group_length")
     if group_length < 2:
@@ -385,12 +404,33 @@ def parse_config(data, path: Path) -> Config:
     exec_log_dir = Path(_check(exec_section.get("log_dir", "~/Library/Logs/mylauncher/execute"), str, "execute.log_dir")).expanduser()
     exec_notify = _check(exec_section.get("notify", True), bool, "execute.notify")
 
-    words = [run_word, kill_word, help_word, edit_word, execute_word]
-    for word_name, word in (("edit.word", edit_word), ("execute.word", execute_word)):
+    secret_section = data.get("secret", {})
+    _check(secret_section, dict, "secret")
+    secret_word = _check(secret_section.get("word", "secret"), str, "secret.word").lower()
+    secret_edit_word = _check(secret_section.get("edit_word", "keep_secret"), str, "secret.edit_word").lower()
+    secret_file = Path(_check(secret_section.get("file", "~/.config/mylauncher/secrets.env"), str, "secret.file")).expanduser()
+    clear_seconds = _check(secret_section.get("clear_seconds", 30), int, "secret.clear_seconds")
+    secret_service = _check(secret_section.get("keychain_service", "justtothepoint-toolkit"), str, "secret.keychain_service")
+    reveal = _check(secret_section.get("reveal_chars", 4), int, "secret.reveal_chars")
+    if clear_seconds < 0 or reveal < 0:
+        raise ConfigError("secret.clear_seconds and secret.reveal_chars cannot be negative (0 = off)")
+
+    notifications = data.get("notifications", {})
+    _check(notifications, dict, "notifications")
+    notify_method = _check(notifications.get("method", "auto"), str, "notifications.method")
+    if notify_method not in NOTIFY_METHODS:
+        raise ConfigError(f'notifications.method must be one of: {", ".join(NOTIFY_METHODS)}')
+    toast = _check(notifications.get("toast", False), bool, "notifications.toast")
+    toast_seconds = notifications.get("toast_seconds", 2.0)
+    if isinstance(toast_seconds, bool) or not isinstance(toast_seconds, (int, float)) or toast_seconds <= 0:
+        raise ConfigError("notifications.toast_seconds must be a number of seconds above 0")
+
+    words = [run_word, kill_word, help_word, edit_word, execute_word, secret_word, secret_edit_word]
+    for word_name, word in (("edit.word", edit_word), ("execute.word", execute_word), ("secret.word", secret_word), ("secret.edit_word", secret_edit_word)):
         if not word or len(word.split()) != 1:
             raise ConfigError(f"{word_name} must be ONE word")
     if len(set(words)) != len(words):
-        raise ConfigError("apps.word, kill.word, help.word, edit.word and execute.word must all be different words")
+        raise ConfigError("apps.word, kill.word, help.word, edit.word, execute.word, secret.word and secret.edit_word must all be different words")
     defaults = Config.__dataclass_fields__
     help_paths = {}
     for setting, field_name in (("aliases_file", "help_aliases_file"), ("functions_file", "help_functions_file"),
@@ -436,6 +476,9 @@ def parse_config(data, path: Path) -> Config:
         expander_folder=expander_folder,
         expander_strip_cursor=strip_cursor,
         expander_notify=notify,
+        expander_paste=paste,
+        expander_paste_delay_ms=paste_delay,
+        expander_copy_log=copy_log,
         expander_group_length=group_length,
         expander_groups=groups,
         hotkey_swallow=hotkey_swallow,
@@ -446,6 +489,15 @@ def parse_config(data, path: Path) -> Config:
         window_colors=colors,
         browser_command=browser_command,
         help_word=help_word,
+        secret_word=secret_word,
+        secret_edit_word=secret_edit_word,
+        secret_file=secret_file,
+        secret_clear_seconds=clear_seconds,
+        secret_reveal=reveal,
+        secret_service=secret_service,
+        notify_method=notify_method,
+        toast=toast,
+        toast_seconds=float(toast_seconds),
         edit_word=edit_word,
         edit_path=edit_file,
         edit_editor=editor_command,

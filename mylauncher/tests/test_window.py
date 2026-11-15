@@ -54,6 +54,7 @@ class Window(unittest.TestCase):
         except tk.TclError:
             self.skipTest("no screen available")
         self.addCleanup(self.root.destroy)
+        self.addCleanup(lambda: self.window.toast and self.window.toast.close())  # no timer may outlive the window
         self.engine = FakeEngine()
         self.answers = []  # what the user "clicks" in the confirmation question
         self.asked = []
@@ -350,3 +351,141 @@ class FrontTrick(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(tk is None, "tkinter is not installed")
+class Toasts(Window):
+    SECRET_ROW = {"id": "secret:KEY", "title": "KEY", "kind": "secret", "confirm": False, "complete": "secret KEY", "icon": "🔑",
+                  "badge": "Secret", "subtitle": "••••••••abcd", "detail": "KEY\n\nsk-the-whole-value"}
+
+    def test_a_copy_shows_a_toast_with_the_message_and_it_goes_away(self):
+        self.engine.ITEMS = [dict(Look.HELP_ROW, detail="")]
+        self.engine.run_results = [RunResult(True, "deploy copied to the clipboard")]
+        self.window.show()
+        self.window._run_selected()
+        self.assertIsNotNone(self.window.toast.window)
+        self.assertIn("deploy copied", self.window.toast.window.winfo_children()[0].cget("text"))
+        self.window.toast.close()
+        self.assertIsNone(self.window.toast.window)
+
+    SNIPPET_ROW = dict(Look.HELP_ROW, detail="", kind="snippet")
+
+    def paste_window(self, paste_on):
+        self.pasted = []
+        config = parse_config(support.good_config(expander={"paste": paste_on, "paste_delay_ms": 0}), Path("x"))
+        window = LauncherWindow(self.root, self.engine, config, front=lambda: None, style=lambda *a: False, paste=lambda: self.pasted.append(1))
+        self.addCleanup(lambda: window.toast and window.toast.close())
+        return window
+
+    def test_a_snippet_is_pasted_after_the_copy_when_paste_is_on(self):
+        self.engine.ITEMS = [self.SNIPPET_ROW]
+        window = self.paste_window(True)
+        window.show()
+        window._run_selected()
+        self.assertFalse(window.visible)
+        self.root.update()  # the delayed paste (0 ms) runs
+        self.root.after(50, self.root.quit)
+        self.root.mainloop()
+        self.assertEqual(self.pasted, [1])
+
+    def test_nothing_is_pasted_when_paste_is_off_or_the_copy_failed(self):
+        self.engine.ITEMS = [self.SNIPPET_ROW]
+        window = self.paste_window(False)
+        window.show()
+        window._run_selected()
+        self.engine.run_results = [RunResult(False, "boom")]
+        window = self.paste_window(True)
+        window.show()
+        window._run_selected()
+        self.root.after(50, self.root.quit)
+        self.root.mainloop()
+        self.assertEqual(self.pasted, [])
+
+    def test_a_failing_paste_does_not_raise(self):
+        window = self.paste_window(True)
+        window.paste = lambda: 1 / 0
+        window._paste()
+
+    def test_the_toast_closes_itself_after_the_configured_seconds(self):
+        self.window.toast.seconds = 0.05
+        self.window.toast.show("hi")
+        self.root.update()
+        self.root.after(200, self.root.quit)
+        self.root.mainloop()
+        self.assertIsNone(self.window.toast.window)
+
+    def test_a_native_panel_is_used_when_there_is_one_and_closed_after(self):
+        class Panel:
+            closed = False
+            def orderOut_(self, _): Panel.closed = True
+        shown = []
+        toast = type(self.window.toast)(self.root, self.window.theme, 0.05, 10, native=lambda text, theme, top: shown.append(text) or Panel())
+        toast.show("hello")
+        self.assertEqual(shown, ["hello"])
+        self.assertIsNone(toast.window)  # no Tk window was made
+        toast.close()
+        self.assertTrue(Panel.closed)
+        self.assertIsNone(toast.panel)
+
+    def test_after_success_the_window_is_hidden(self):
+        self.window.show()
+        self.window.input.set("run saf")
+        self.window._run_selected()
+        self.assertFalse(self.window.visible)
+
+    def test_when_the_engine_fails_the_window_stays_with_the_text_and_the_error(self):
+        self.engine.run_results = [RunResult(False, "could not copy: boom")]
+        self.window.show()
+        self.window.input.set("run saf")
+        self.window._run_selected()
+        self.assertTrue(self.window.visible)
+        self.assertEqual(self.window.input.get(), "run saf")
+        self.assertIn("could not copy", self.window.status.cget("text"))
+
+    def test_opening_an_app_shows_no_toast(self):
+        self.engine.run_results = [RunResult(True, "opened Safari")]
+        self.window.show()
+        self.window.input.set("run saf")
+        self.window._run_selected()
+        self.assertIsNone(self.window.toast.window)
+
+    def test_toast_can_be_switched_off(self):
+        config = parse_config(support.good_config(notifications={"toast": False}), Path("x"))
+        window = LauncherWindow(self.root, self.engine, config, front=lambda: None, style=lambda *a: True)
+        self.assertIsNone(window.toast)
+
+    def test_a_secret_row_opens_its_detail_then_copies(self):
+        self.engine.ITEMS = [self.SECRET_ROW]
+        self.engine.run_results = [RunResult(True, "KEY copied to the clipboard (the clipboard is emptied in 30 s)")]
+        self.window.show()
+        self.window._run_selected()
+        self.assertIn("sk-the-whole-value", self.window.detail.content())
+        self.assertEqual(self.engine.ran, [])
+        self.window._run_selected()
+        self.assertEqual(self.engine.ran, ["secret:KEY"])
+        self.assertIn("KEY copied", self.window.toast.window.winfo_children()[0].cget("text"))
+
+    def test_the_masked_row_never_contains_the_value(self):
+        self.engine.ITEMS = [self.SECRET_ROW]
+        self.window.show()
+        self.assertNotIn("sk-the-whole-value", " ".join(" ".join(r) for r in self.window.list.texts()))
+
+
+class NotClosedByAccident(Window):
+    def test_a_close_request_hides_the_window_and_the_program_goes_on(self):
+        import mylauncher_app
+        lines = []
+        mylauncher_app.protect_from_closing(self.root, self.window, log=lines.append)
+        self.window.show()
+        self.root.tk.call(self.root.protocol("WM_DELETE_WINDOW"))  # what Tk does when the window is asked to close
+        self.assertTrue(self.root.winfo_exists())
+        self.assertFalse(self.window.visible)
+        self.assertIn("CLOSE", lines[0])
+
+    def test_a_quit_request_is_ignored_and_logged(self):
+        import mylauncher_app
+        lines = []
+        mylauncher_app.protect_from_closing(self.root, self.window, log=lines.append)
+        self.root.tk.call("::tk::mac::Quit")
+        self.assertTrue(self.root.winfo_exists())
+        self.assertIn("QUIT", lines[0])

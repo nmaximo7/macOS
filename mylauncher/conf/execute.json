@@ -1,0 +1,32 @@
+[
+  {
+    "description": "help, my help script",
+    "emoji": "📚",
+    "command": "sh ~/macOS/scripts/help.sh",
+    "terminal": true
+  },
+  {
+    "description": "maintain-mac.conf, maintain the Mac (maintain-mac.sh --run --yes)",
+    "emoji": "🧹",
+    "command": "sh ~/macOS/scripts/maintain-mac.sh --run --yes",
+    "terminal": true
+  },
+  {
+    "description": "shutdown my computer",
+    "emoji": "🔌",
+    "command": "shutdown mac --now",
+    "confirm": true
+  },
+  {
+    "description": "content_creation, check & improve a Hugo page",
+    "emoji": "✍️",
+    "command": "content_creation",
+    "terminal": true
+  },
+  {
+    "description": "greetings, daily briefing script",
+    "emoji": "☀️",
+    "command": "greetings",
+    "terminal": true
+  }
+]

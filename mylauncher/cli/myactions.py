@@ -30,6 +30,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from myexecute import DEFAULT_SHELL, DEFAULT_SOURCE, DEFAULT_TERMINAL_COMMAND, background_script, terminal_script
+import hashlib
+
+import mynotify
+from mysecret import ensure_file
 from mykill import alive, applescript_quote, running_apps
 from mytypes import Item
 
@@ -59,6 +63,9 @@ class RunOptions:
     auto_force: bool = False  # kill: force quit without asking when it did not quit
     sleep: object = field(default=time.sleep, repr=False)  # replaced in tests so they do not really wait
     notify: bool = True  # copy_snippet: show a macOS notification
+    notify_method: str = "auto"  # how: auto, osascript, terminal-notifier, none (see mynotify.py)
+    copy_log: object = None  # copy_snippet: a file that gets one line per copy (None = no log)
+    clear_seconds: int = 30  # copy_secret: empty the clipboard again after this many seconds (0 = never)
     browser_command: tuple = ()  # open_url: ["/…/zen", "-new-tab", "{url}"]; empty = plain `open <url>`
     editor_command: tuple = ("open", "-a", "Visual Studio Code", "{path}")  # edit_file: {path} = the file
     shell: tuple = DEFAULT_SHELL  # execute_*: "<shell> <script>"
@@ -158,6 +165,27 @@ def prefix_hint(item: Item, runner=default_runner, dry_run: bool = False, option
 NOTIFICATION_WIDTH = 120  # a notification shows only a few lines: cut long texts
 
 
+def _clipboard_holds(runner, text: str) -> bool:
+    """Read the clipboard back (`pbpaste`) and compare: an honest "it worked", not a hope."""
+    try:
+        done = runner(["pbpaste"])
+    except Exception:  # noqa: BLE001 - cannot check: do not fail a copy that probably worked
+        return True
+    return done.returncode != 0 or (done.stdout or "").replace("\r\n", "\n") == text.replace("\r\n", "\n")
+
+
+def _log_copy(path, item, count: int, checked: bool, seconds: float) -> None:
+    if not path:
+        return
+    try:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as log:
+            log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {item.id}  {count} chars  clipboard {'verified' if checked else 'DIFFERENT'}  {seconds * 1000:.0f} ms\n")
+    except OSError:
+        pass  # a log must never break a copy
+
+
 def copy_snippet(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
     """Copy item.target (the snippet text) to the clipboard, then show a notification.
 
@@ -177,17 +205,20 @@ def copy_snippet(item: Item, runner=default_runner, dry_run: bool = False, optio
         return ActionResult(False, "the program 'pbcopy' was not found (is this a Mac?)", command)
     if done.returncode != 0:
         return ActionResult(False, f"could not copy: {(done.stderr or '').strip() or f'exit code {done.returncode}'}", command)
+    started = time.monotonic()
+    checked = _clipboard_holds(runner, item.target)
+    if not checked:  # the clipboard does not hold the text: try once more
+        runner(command, input_text=item.target)
+        checked = _clipboard_holds(runner, item.target)
+    _log_copy(options.copy_log, item, count, checked, time.monotonic() - started)
     message = f"{item.title} copied to the clipboard ({count} characters)"
+    if not checked:
+        return ActionResult(False, f"{item.title}: pbcopy ran but the clipboard does not hold the {count} characters (see {options.copy_log or 'ml doctor'})", command)
     if options.notify:
         shown = item.subtitle[:NOTIFICATION_WIDTH] or item.target[:NOTIFICATION_WIDTH]
-        script = (
-            f'display notification "{applescript_quote(shown)}" with title "mylauncher" '
-            f'subtitle "{applescript_quote(item.title)} copied to the clipboard"'
-        )
-        try:
-            runner(["osascript", "-e", script])
-        except (FileNotFoundError, OSError):
-            pass  # no notification, but the text IS in the clipboard
+        ok, detail = mynotify.send(runner, options.notify_method, "mylauncher", f"{item.title} copied to the clipboard", shown)
+        if not ok:
+            message += f"  (notification failed: {detail}; try: ml notify-test)"
     return ActionResult(True, message, command)
 
 
@@ -250,6 +281,54 @@ def kill_app(item: Item, runner=default_runner, dry_run: bool = False, options=N
 
 # The "phone book" of actions: the name written in an Item -> the function to call.
 # To teach the launcher a new trick you write a function above and add one line here.
+def copy_secret(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """Copy a secret value to the clipboard and empty the clipboard again after `clear_seconds`.
+
+    The value is never printed or logged. To empty the clipboard only if it STILL holds the secret (you may
+    have copied something else since), a background shell compares a SHA-256 fingerprint of the clipboard
+    with the secret's; the fingerprint is one-way, the secret itself is never on a command line.
+    """
+    options = options or RunOptions()
+    command = ["pbcopy"]
+    if dry_run:
+        return ActionResult(True, f"dry run, nothing was done. Would copy {item.title} with pbcopy and empty the clipboard after {options.clear_seconds} s", command)
+    try:
+        done = runner(command, input_text=item.target)
+    except FileNotFoundError:
+        return ActionResult(False, "the program 'pbcopy' was not found (is this a Mac?)", command)
+    if done.returncode != 0:
+        return ActionResult(False, f"could not copy: {(done.stderr or '').strip() or f'exit code {done.returncode}'}", command)
+    message = f"{item.title} copied to the clipboard"
+    if options.clear_seconds > 0:
+        fingerprint = hashlib.sha256(item.target.encode("utf-8")).hexdigest()
+        script = f'sleep {int(options.clear_seconds)}; [ "$(pbpaste | /usr/bin/shasum -a 256)" = "{fingerprint}  -" ] && printf "" | pbcopy'
+        try:
+            (options.spawn or default_spawn)(["/bin/sh", "-c", script], Path(options.log_dir) / "secret-clear.log")
+            message += f" (the clipboard is emptied in {options.clear_seconds} s)"
+        except OSError:
+            message += " (could not schedule emptying the clipboard)"
+    if options.notify:
+        ok, detail = mynotify.send(runner, options.notify_method, "mylauncher", f"{item.title} copied", f"The clipboard is emptied in {options.clear_seconds} s" if options.clear_seconds else "")
+        if not ok:
+            message += f"  (notification failed: {detail})"
+    return ActionResult(True, message, command)
+
+
+def edit_secret(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """Open the secret file in the editor; create it first (permissions 600) if it does not exist."""
+    options = options or RunOptions()
+    if dry_run:
+        return edit_file(item, runner, True, options)
+    try:
+        path, done = ensure_file(item.target)
+    except OSError as exc:
+        return ActionResult(False, f"cannot create {item.target}: {exc}", [])
+    result = edit_file(Item(item.id, item.title, "edit", "edit_file", target=str(path)), runner, False, options)
+    if result.ok and done:
+        result = ActionResult(True, f"{result.message} ({done})", result.command)
+    return result
+
+
 def edit_file(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
     """Open item.target in the editor of the configuration (`edit.editor`).
 
@@ -286,7 +365,7 @@ def execute_background(item: Item, runner=default_runner, dry_run: bool = False,
     A notification tells how it ended; its output is in the log file (shown in the message).
     """
     options = options or RunOptions()
-    script = background_script(item.title, item.target, options.source_files, options.execute_notify)
+    script = background_script(item.title, item.target, options.source_files, options.execute_notify, options.notify_method)
     command = [*options.shell, script]
     log = _log_path(item, options)
     if dry_run:
@@ -323,6 +402,8 @@ def execute_terminal(item: Item, runner=default_runner, dry_run: bool = False, o
 
 
 ACTIONS = {
+    "copy_secret": copy_secret,
+    "edit_secret": edit_secret,
     "edit_file": edit_file,
     "execute_background": execute_background,
     "execute_terminal": execute_terminal,

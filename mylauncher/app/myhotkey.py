@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import ctypes
 import sys
+import time
 
 # pynput names the modifier keys cmd, cmd_r, shift, shift_r, alt, alt_r, alt_gr, ctrl, ctrl_r...
 # We only care about which KIND it is: the prefix before "_".
@@ -52,6 +53,7 @@ class HotkeyMatcher:
         self.modifiers, self.key, self.callback = frozenset(modifiers), key.lower(), callback
         self.held = set()  # modifiers currently down
         self.armed = True  # False while the key is still down: holding "d" repeats presses, we fire once
+        self.last_attempt = 0.0  # when the key was last seen down; if its key-up was lost we do not stay disarmed for ever
 
     def press(self, raw_key) -> None:
         kind = normalise(raw_key)
@@ -66,8 +68,11 @@ class HotkeyMatcher:
     def trigger(self) -> bool:
         """Call the callback once per physical key press (two sources may report the same press:
         pynput's normal callbacks and the intercept below, so both come through here)."""
-        if not self.armed:
+        now = time.monotonic()
+        if not self.armed and now - self.last_attempt < 0.6:  # still held down (repeat), or a real double press
+            self.last_attempt = now
             return False
+        self.last_attempt = now
         self.armed = False
         self.callback()
         return True
@@ -102,6 +107,18 @@ def quartz_reader(event):
     return modifiers, (text or "").lower(), bool(repeat)
 
 
+def hid_key_age() -> float:
+    """Seconds since the last key press that the keyboard hardware reported (whatever application got it)."""
+    import Quartz
+
+    return float(Quartz.CGEventSourceSecondsSinceLastEventType(Quartz.kCGEventSourceStateHIDSystemState, Quartz.kCGEventKeyDown))
+
+
+# macOS switches an event tap OFF when its callback is too slow (a flood of key events, e.g. Espanso typing a long text)
+# and tells the callback with one of these two "event types". pynput does not switch it on again, so we notice and restart.
+TAP_DISABLED = (0xFFFFFFFE, 0xFFFFFFFF, -2, -1)  # by timeout, by user input (signed or unsigned, depending on the binding)
+
+
 class HotkeyListener:
     """Starts pynput and feeds the HotkeyMatcher.
 
@@ -111,7 +128,7 @@ class HotkeyListener:
     do, and returns None to throw one away. `self.swallowing` tells whether it worked.
     """
 
-    def __init__(self, modifiers, key, callback, factory=None, swallow=False, reader=quartz_reader):
+    def __init__(self, modifiers, key, callback, factory=None, swallow=False, reader=quartz_reader, key_age=hid_key_age):
         self.matcher = HotkeyMatcher(modifiers, key, callback)  # callback runs in pynput's thread!
         self._factory = factory  # tests give a fake; normally None = the real pynput
         self._listener = None
@@ -119,13 +136,72 @@ class HotkeyListener:
         self._reader = reader
         self._swallowed_down = False  # we threw the key-down away, so we throw the matching key-up away too
         self.swallowing = False
+        self.tap_disabled = False  # macOS switched the tap off: see healthy()
+        self._key_age = key_age  # how long ago the hardware saw a key (replaced in tests)
+        self.last_seen = time.monotonic()  # when OUR tap last saw a key event
+        self.last_restart = 0.0
+
+    def healthy(self) -> bool:
+        """False when the hotkey cannot work any more (tap switched off, or pynput's thread ended)."""
+        if self._listener is None:
+            return True  # never started (no permission...): nothing to repair
+        alive = getattr(self._listener, "is_alive", lambda: True)()
+        return alive and not self.tap_disabled and not self.starved()
+
+    def starved(self) -> bool:
+        """True when the keyboard had a key press that OUR tap never saw: the tap is silently dead.
+
+        (The log of a real Mac showed it: after an action no "[hotkey] pressed" any more, and no "tap disabled" event either.)
+        """
+        try:
+            hardware = self._key_age()
+        except Exception:  # noqa: BLE001 - cannot ask (no Quartz): assume all is well
+            return False
+        ours = time.monotonic() - self.last_seen
+        return hardware + 1.0 < ours
+
+    def guard(self, log=print, every: float = 1.5, minimum_gap: float = 10.0):
+        """A background thread (no Tk): every `every` seconds, if the hotkey is not healthy, start a new listener."""
+        import threading
+
+        def loop():
+            while True:
+                time.sleep(every)
+                try:
+                    if self._listener is None or self.healthy() or time.monotonic() - self.last_restart < minimum_gap:
+                        continue
+                    log(f"[guard] the keyboard listener is dead (tap_disabled={self.tap_disabled}); starting a new one")
+                    self.last_restart = time.monotonic()
+                    self.restart()
+                except Exception as exc:  # noqa: BLE001 - the guard itself must never die
+                    log(f"[guard] restart failed: {exc}")
+
+        thread = threading.Thread(target=loop, name="hotkey-guard", daemon=True)
+        thread.start()
+        return thread
+
+    def restart(self) -> None:
+        """Throw the old listener away and start a new one (a new event tap)."""
+        try:
+            self.stop()
+        except Exception:  # noqa: BLE001 - a dead listener may complain when stopped
+            self._listener = None
+        self.tap_disabled = False
+        self._swallowed_down = False
+        self.matcher.armed = True
+        self.last_seen = time.monotonic()
+        self.start()
 
     def intercept(self, event_type, event):
         """pynput calls this for every key event. Return the event to let it through, None to swallow it.
 
         Whatever goes wrong here, the event is let through: a bug must never take the keyboard away.
         """
+        self.last_seen = time.monotonic()
         try:
+            if event_type in TAP_DISABLED:
+                self.tap_disabled = True
+                return event
             if event_type not in (KEY_DOWN, KEY_UP):
                 return event
             modifiers, char, repeat = self._reader(event)

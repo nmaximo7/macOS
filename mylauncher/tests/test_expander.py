@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 import support
-from myactions import RunOptions, run_item
+from myactions import RunOptions, copy_snippet, run_item
 from myexpander import Snippet, find_yaml_files, load_snippets, parse_matches, preview, yaml_loader
 from mytypes import Item
 from test_cli import CliCase
@@ -159,8 +159,8 @@ class CopyAction(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(runner.calls[0], ["pbcopy"])
         self.assertEqual(runner.inputs, ["https://justtothepoint.com/"])  # exactly the text, sent to pbcopy
-        self.assertEqual(runner.calls[1][0], "osascript")
-        script = runner.calls[1][2]
+        self.assertEqual(runner.calls[2][0], "osascript")
+        script = runner.calls[2][2]
         self.assertIn('display notification "https://justtothepoint.com/"', script)
         self.assertIn(';bsite copied to the clipboard', script)
         self.assertIn("copied to the clipboard (27 characters)", result.message)
@@ -168,13 +168,13 @@ class CopyAction(unittest.TestCase):
     def test_notification_can_be_switched_off(self):
         runner = support.FakeRunner()
         run_item(self.ITEM, runner=runner, options=RunOptions(notify=False))
-        self.assertEqual([c[0] for c in runner.calls], ["pbcopy"])
+        self.assertEqual([c[0] for c in runner.calls], ["pbcopy", "pbpaste"])
 
     def test_quotes_and_backslashes_cannot_break_the_notification(self):
         item = Item("snip:;q", ";q", "snippet", "copy_snippet", target='say "hi" \\ done', subtitle='say "hi" \\ done')
         runner = support.FakeRunner()
         run_item(item, runner=runner)
-        self.assertIn('say \\"hi\\" \\\\ done', runner.calls[1][2])
+        self.assertIn('say \\"hi\\" \\\\ done', runner.calls[2][2])
 
     def test_text_is_copied_exactly_even_when_long_or_multiline_or_unicode(self):
         text = "línea 1\n\tlínea 2 ñ 😀\n" + "x" * 5000
@@ -182,7 +182,7 @@ class CopyAction(unittest.TestCase):
         runner = support.FakeRunner()
         run_item(item, runner=runner)
         self.assertEqual(runner.inputs, [text])
-        self.assertLessEqual(len(runner.calls[1][2]), 300)  # the notification is cut short, the clipboard is not
+        self.assertLessEqual(len(runner.calls[2][2]), 300)  # the notification is cut short, the clipboard is not
 
     def test_a_failed_notification_does_not_fail_the_copy(self):
         class Flaky(support.FakeRunner):
@@ -322,3 +322,33 @@ class WithoutYaml(CliCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CopyIsVerified(unittest.TestCase):
+    ITEM = Item(id="snip:;long", title=";long", kind="snippet", action="copy_snippet", target="x" * 50000 + "\nend")
+
+    def test_a_clipboard_that_does_not_hold_the_text_is_retried_then_reported(self):
+        runner = support.FakeRunner(outputs={("pbpaste",): "cut short"})
+        result = copy_snippet(self.ITEM, runner, options=RunOptions(notify=False))
+        self.assertFalse(result.ok)
+        self.assertEqual([c[0] for c in runner.calls], ["pbcopy", "pbpaste", "pbcopy", "pbpaste"])
+        self.assertIn("does not hold", result.message)
+
+    def test_a_good_copy_is_verified_once_and_logged(self):
+        import tempfile
+        log = Path(tempfile.mkdtemp()) / "sub" / "copy.log"
+        runner = support.FakeRunner()
+        result = copy_snippet(self.ITEM, runner, options=RunOptions(notify=False, copy_log=log))
+        self.assertTrue(result.ok)
+        self.assertEqual([c[0] for c in runner.calls], ["pbcopy", "pbpaste"])
+        line = log.read_text()
+        self.assertIn("snip:;long", line)
+        self.assertIn("50004 chars", line)
+        self.assertIn("verified", line)
+
+    def test_skipped_snippets_are_named(self):
+        notes = []
+        data = {"matches": [{"trigger": ";a", "replace": "ok"}, {"trigger": ";b", "replace": "x {{y}}"}, {"trigger": ";c", "replace": "z", "vars": []}]}
+        snippets, skipped = parse_matches(data, "f.yml", True, notes)
+        self.assertEqual((len(snippets), skipped), (1, 2))
+        self.assertEqual(notes, ["f.yml ;b: has {{...}} in the text", "f.yml ;c: vars/form"])

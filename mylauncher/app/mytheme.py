@@ -16,6 +16,8 @@ MODE_LABELS = {
     "snippets": "✂️ Snippets",
     "help": "📚 Help",
     "edit": "📝 Edit a file",
+    "secret": "🔑 Secrets",
+    "keep_secret": "🔐 Edit the secret file",
     "execute": "▶️ Execute",
 }
 

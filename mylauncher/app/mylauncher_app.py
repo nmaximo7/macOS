@@ -19,8 +19,10 @@ just drops a message in a queue, and the main thread looks at the queue 10 times
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import os
 import queue
+import signal
 import sys
 from pathlib import Path
 
@@ -41,6 +43,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mylauncher_app", description="mylauncher window and hotkey")
     parser.add_argument("--config", metavar="FILE", help="configuration file")
     parser.add_argument("--show", action="store_true", help="show the window right away")
+    parser.add_argument("--toast-test", action="store_true", help="show the toast for 3 seconds, with the window hidden, and exit")
     parser.add_argument("--hotkey-test", action="store_true", help="only print a line when the hotkey is pressed")
     parser.add_argument("--keys", action="store_true", help="print EVERY key the program can see (to diagnose permissions)")
     return parser
@@ -65,6 +68,21 @@ def keys_test() -> int:
         listener.join()
     except KeyboardInterrupt:
         pass
+    return 0
+
+
+def toast_test(config) -> int:
+    """Same situation as after a copy: the launcher window is hidden, then the toast appears."""
+    import tkinter as tk
+    from mytheme import make_theme
+    from mytoast import Toast
+    root = tk.Tk()
+    root.withdraw()
+    toast = Toast(root, make_theme(config), 3.0, config.window_top_offset)
+    toast.show("✔  toast test: do you see this at the top of the screen?")
+    print("toast shown with " + ("the Cocoa panel" if toast.panel is not None else "the Tk window (fallback)") + "; waiting 3 seconds")
+    root.after(3500, root.destroy)
+    root.mainloop()
     return 0
 
 
@@ -101,15 +119,32 @@ def run(config, config_path, show: bool) -> int:
     root = tk.Tk()
     root.withdraw()  # start hidden: the hotkey shows it
     window = LauncherWindow(root, Engine(config_path=config_path), config)
+    protect_from_closing(root, window, log=lambda text: print(text, flush=True))
 
     messages: queue.Queue = queue.Queue()
-    listener = HotkeyListener(config.hotkey_modifiers, config.hotkey_key, lambda: messages.put("toggle"), swallow=config.hotkey_swallow)
+    listener = HotkeyListener(config.hotkey_modifiers, config.hotkey_key, lambda: (print("[hotkey] pressed", flush=True), messages.put("toggle")), swallow=config.hotkey_swallow)
     try:
         listener.start()
     except RuntimeError as exc:
         print(f"warning: no hotkey ({exc}); use --show", file=sys.stderr)
     else:
         print(f"hotkey swallowing: {'on' if listener.swallowing else 'off'}", flush=True)
+        listener.guard(log=lambda text: print(text, flush=True))
+
+    def watchdog() -> None:
+        """Every 2 s: if macOS switched the hotkey off (too many key events at once), start it again."""
+        # Dead-man switch: faulthandler's own C thread (it needs no GIL) prints the stack of EVERY thread into the log
+        # if this function does not run again within 8 s, i.e. if the window's event loop is stuck. That shows where.
+        faulthandler.dump_traceback_later(8, repeat=False, file=sys.stderr)
+        if not listener.healthy():
+            print("[hotkey] the keyboard listener stopped (macOS switches it off after a flood of key events); restarting it", flush=True)
+            try:
+                listener.restart()
+            except Exception as exc:  # noqa: BLE001 - try again at the next beat
+                print(f"[hotkey] restart failed: {exc}", file=sys.stderr, flush=True)
+        root.after(2000, watchdog)
+
+    root.after(2000, watchdog)
 
     bar = None
     if config.menubar_enabled:
@@ -132,8 +167,17 @@ def run(config, config_path, show: bool) -> int:
                 print("quit chosen in the menu bar", flush=True)
                 root.quit()
                 return
-            window.toggle()
-            print(f"{message} received: window {'shown' if window.visible else 'hidden'}", flush=True)  # proof that each step worked
+            try:
+                print(f"[poll] {message}: handling", flush=True)
+                window.toggle()
+                print(f"{message} received: window {'shown' if window.visible else 'hidden'}", flush=True)  # proof that each step worked
+            except Exception:  # noqa: BLE001 - one failure must never end the polling: the hotkey would be dead for ever
+                import traceback
+                print(f"[window] {message} failed:\n{traceback.format_exc()}", file=sys.stderr, flush=True)
+                try:
+                    window.hide()
+                except Exception:  # noqa: BLE001
+                    pass
         root.after(POLL_MS, poll)
 
     if show:
@@ -145,10 +189,57 @@ def run(config, config_path, show: bool) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        print("[app] the main loop ended", flush=True)  # if this line is the last one in the log, the loop returned by itself
         listener.stop()
         if bar is not None:
             bar.stop()
     return 0
+
+
+def protect_from_closing(root, window, log=print) -> None:
+    """The program must only end when the user chooses "Quit" in the menu bar icon.
+
+    Found on a real Mac (step 9i): after an action the program ended with exit code 0 and launchd, which restarts only
+    after a CRASH, left it dead. Tk ends the program by itself when the window is asked to close, and when macOS sends
+    the "quit" Apple event. Both are answered here: logged, and ignored.
+    """
+    def ignore_close():
+        log("[app] a request to CLOSE the window was ignored (the window is hidden instead)")
+        window.hide()
+
+    def ignore_quit(*_):
+        log("[app] a QUIT request from macOS was ignored (use the menu bar icon > Quit mylauncher to quit)")
+
+    root.protocol("WM_DELETE_WINDOW", ignore_close)
+    root.createcommand("::tk::mac::Quit", ignore_quit)
+
+
+def log_exit_calls() -> None:
+    """Print the Python stack whenever something calls sys.exit(): that names the culprit if it is Python code."""
+    import traceback
+
+    def hook(event, args):
+        if event == "sys.exit":
+            print(f"[app] sys.exit({args[0]!r}) called from:\n{''.join(traceback.format_stack(limit=12))}", flush=True)
+
+    try:
+        sys.addaudithook(hook)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def enable_stack_dumps() -> None:
+    """Crash dumps, and `kill -USR1 <pid>` prints the stacks of all threads into the log (for a program that hangs)."""
+    try:
+        faulthandler.enable(file=sys.stderr, all_threads=True)
+        faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
+        for name in ("SIGTERM", "SIGHUP", "SIGQUIT"):  # who stops us: print the stacks, then let the signal do its job
+            faulthandler.register(getattr(signal, name), file=sys.stderr, all_threads=True, chain=True)
+        import atexit
+
+        atexit.register(lambda: print("[app] the program is exiting", flush=True))
+    except (AttributeError, ValueError, OSError):
+        pass  # not available here: the launcher works without
 
 
 def main(argv=None) -> int:
@@ -159,8 +250,12 @@ def main(argv=None) -> int:
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    enable_stack_dumps()
+    log_exit_calls()
     if args.keys:
         return keys_test()
+    if args.toast_test:
+        return toast_test(config)
     return hotkey_test(config) if args.hotkey_test else run(config, config_path, args.show)
 
 

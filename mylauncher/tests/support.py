@@ -31,6 +31,10 @@ def good_config(folders=(), **changes) -> dict:
         ],
     }
     data.update(changes)
+    if isinstance(data.get("expander", {}), dict):
+        data["expander"] = {"copy_log": "", "paste": False, **data.get("expander", {})}
+    if isinstance(data.get("notifications", {}), dict):
+        data["notifications"] = {"toast": True, **data.get("notifications", {})}  # the toast is off by default; most window tests want it on  # tests never write into the real ~/Library/Logs
     return data
 
 
@@ -78,7 +82,10 @@ class FakeRunner:
             raise self.error
         from types import SimpleNamespace
 
-        return SimpleNamespace(returncode=self.returncode, stderr=self.stderr, stdout=self.outputs.get(tuple(command), ""))
+        stdout = self.outputs.get(tuple(command), "")
+        if tuple(command) == ("pbpaste",) and tuple(command) not in self.outputs and self.inputs:
+            stdout = self.inputs[-1]  # a clipboard that holds what pbcopy was given last
+        return SimpleNamespace(returncode=self.returncode, stderr=self.stderr, stdout=stdout)
 
 
 class FakeSystem:
@@ -114,6 +121,8 @@ class FakeSystem:
             self.clipboard = input_text  # pbcopy
         done = lambda rc=0, out="", err="": SimpleNamespace(returncode=rc, stdout=out, stderr=err)  # noqa: E731
         program = command[0]
+        if program == "pbpaste":
+            return done(out=self.clipboard)
         if program == "ps" and command[1] == "-axo":
             return done(out="".join(f"{pid:>6} {cmd}\n" for pid, cmd in self.procs.items()))
         if program == "ps" and command[1] == "-p":

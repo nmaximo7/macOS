@@ -1,0 +1,27 @@
+[
+  {
+    "description": "aliases, my zsh aliases",
+    "emoji": "🔗",
+    "path": "~/.zsh_aliases"
+  },
+  {
+    "description": "functions, my zsh functions",
+    "emoji": "🧩",
+    "path": "~/.zsh_functions"
+  },
+  {
+    "description": "AeroSpace, an i3-like tiling window manager",
+    "emoji": "🪟",
+    "path": "~/macOS/aerospace/.config/aerospace/aerospace.toml"
+  },
+  {
+    "description": "espanso, text expansion files (triggers and replacements)",
+    "emoji": "✂️",
+    "path": "~/macOS/Espanso/Library/Application Support/**/*.yml"
+  },
+  {
+    "description": "skills, OpenClaw skills (SKILL.md)",
+    "emoji": "🧠",
+    "path": "~/macOS/claude/skills/**/SKILL.md"
+  }
+]

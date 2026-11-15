@@ -55,6 +55,7 @@ class Scan:
 
     snippets: list = field(default_factory=list)
     files: int = 0  # how many .yml files were read
+    skipped_notes: list = field(default_factory=list)  # ["file.yml ;trigger: has {{...}}"], so you can see WHICH ones
     skipped: int = 0  # entries we ignore on purpose (variables, forms, regex...)
     duplicates: int = 0  # the same trigger twice: the first one wins
     problems: list = field(default_factory=list)  # ["file.yml: what went wrong"]
@@ -88,7 +89,7 @@ def clean_text(text: str, strip_cursor: bool = True) -> str:
     return text.replace(CURSOR_MARKER, "") if strip_cursor else text
 
 
-def parse_matches(data, source: str = "", strip_cursor: bool = True) -> tuple:
+def parse_matches(data, source: str = "", strip_cursor: bool = True, notes: list | None = None) -> tuple:
     """data = what the YAML file contained. Returns (snippets, skipped_count). Never raises."""
     if not isinstance(data, dict) or not isinstance(data.get("matches"), list):
         return [], 0  # not a snippets file (Espanso config files look like this): nothing to do, not an error
@@ -105,6 +106,10 @@ def parse_matches(data, source: str = "", strip_cursor: bool = True) -> tuple:
         dynamic = "vars" in entry or "form" in entry or (isinstance(text, str) and "{{" in text)
         if not triggers or not isinstance(text, str) or dynamic:
             skipped += 1  # regex triggers, images, forms, variables...: Espanso itself is needed for these
+            if notes is not None:
+                name = (triggers or [str(entry.get("regex") or entry.get("trigger") or "?")])[0]
+                why = "no trigger/text" if not triggers or not isinstance(text, str) else ("vars/form" if "vars" in entry or "form" in entry else "has {{...}} in the text")
+                notes.append(f"{source} {name}: {why}")
             continue
         label = entry.get("label")
         label = label.strip() if isinstance(label, str) else ""
@@ -133,7 +138,7 @@ def load_snippets(folder, strip_cursor: bool = True, loader="default") -> Scan:
             scan.problems.append(f"{path.name}: {first_line}")
             continue
         scan.files += 1
-        snippets, skipped = parse_matches(data, path.name, strip_cursor)
+        snippets, skipped = parse_matches(data, path.name, strip_cursor, scan.skipped_notes)
         scan.skipped += skipped
         for snippet in snippets:
             if snippet.trigger in seen:

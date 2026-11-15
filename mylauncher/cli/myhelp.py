@@ -377,6 +377,7 @@ def launcher_rows(config, runner) -> tuple:
         Row("help", config.help_word, "this help", f"{config.help_word}              the topics\n{config.help_word} aliases      a topic\n{config.help_word} functions x  a topic, filtered by x", ""),
         Row("edit", config.edit_word, "open a file in your editor", f"{config.edit_word} <name>   opens a file of edit.json in the editor ({' '.join(config.edit_editor)})", ""),
         Row("execute", config.execute_word, "run one of your commands", f"{config.execute_word} <name>   runs a command of execute.json (in a terminal or in the background)", ""),
+        Row("secret", config.secret_word, "your secrets, values hidden", f"{config.secret_word}   the entries of the secret file; Enter shows one, Enter again copies it (the clipboard is emptied after {config.secret_clear_seconds} s)\n{config.secret_edit_word}   opens the file in the editor", ""),
         Row("snippets", ";", "snippet groups, then snippets", "; lists the groups; ;p the snippets of the group ;p. Enter copies the text.", ""),
     ]
     for link in config.quicklinks:
