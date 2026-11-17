@@ -119,6 +119,88 @@ def hid_key_age() -> float:
 TAP_DISABLED = (0xFFFFFFFE, 0xFFFFFFFF, -2, -1)  # by timeout, by user input (signed or unsigned, depending on the binding)
 
 
+class QuartzTap:
+    """Our OWN keyboard listener: one Quartz event tap, no pynput.
+
+    Why: pynput's Listener decodes every key with a text-input API that macOS only allows on the main
+    thread; on recent macOS that kills Python ("Python quit unexpectedly", pynput issues #424 and #510).
+    This tap asks only for keyDown and keyUp, and reads the character through `quartz_reader` inside
+    `intercept` (which never raises). Same small interface as pynput's listener: start, stop, is_alive.
+    """
+
+    def __init__(self, intercept, listen_only=False):
+        self._intercept = intercept
+        self._listen_only = listen_only
+        self._tap = None
+        self._loop = None
+        self._thread = None
+        self._ready = None
+        self._stopped = False
+
+    def start(self) -> None:
+        import threading
+
+        self._ready = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="hotkey-tap", daemon=True)
+        self._thread.start()
+        self._ready.wait(5)
+        if self._tap is None:
+            raise RuntimeError("macOS did not create the keyboard tap (Accessibility / Input Monitoring permission?)")
+
+    def _run(self) -> None:
+        try:
+            import Quartz
+
+            mine = {}  # this tap's own port. NEVER read self._tap in the callback: stop() may have cleared it
+            # and CGEventTapEnable(None, ...) is a segmentation fault (crash report 2026-11-17 12:28).
+
+            def callback(proxy, event_type, event, refcon):
+                if self._stopped:
+                    return event
+                if event_type in TAP_DISABLED:
+                    self._intercept(event_type, event)
+                    port = mine.get("port")
+                    if port is not None:
+                        Quartz.CGEventTapEnable(port, True)  # switch it on again at once
+                    return event
+                return self._intercept(event_type, event)
+
+            mask = (1 << KEY_DOWN) | (1 << KEY_UP)
+            option = Quartz.kCGEventTapOptionListenOnly if self._listen_only else Quartz.kCGEventTapOptionDefault
+            self._tap = Quartz.CGEventTapCreate(Quartz.kCGSessionEventTap, Quartz.kCGHeadInsertEventTap, option, mask, callback, None)
+            if self._tap is None:
+                return
+            mine["port"] = self._tap
+            source = Quartz.CFMachPortCreateRunLoopSource(None, self._tap, 0)
+            self._loop = Quartz.CFRunLoopGetCurrent()
+            Quartz.CFRunLoopAddSource(self._loop, source, Quartz.kCFRunLoopCommonModes)
+            Quartz.CGEventTapEnable(self._tap, True)
+            self._ready.set()
+            Quartz.CFRunLoopRun()
+        finally:
+            self._ready.set()
+
+    def is_alive(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    def stop(self) -> None:
+        try:
+            import Quartz
+
+            self._stopped = True  # first: the callback lets every event through from now on
+            if self._tap is not None:
+                Quartz.CGEventTapEnable(self._tap, False)
+                Quartz.CFMachPortInvalidate(self._tap)
+            if self._loop is not None:
+                Quartz.CFRunLoopStop(self._loop)
+        except Exception as exc:  # noqa: BLE001 - stopping must never raise
+            print(f"[hotkey] stop: {type(exc).__name__}: {exc}", flush=True)
+
+    def join(self) -> None:
+        if self._thread:
+            self._thread.join()
+
+
 class HotkeyListener:
     """Starts pynput and feeds the HotkeyMatcher.
 
@@ -222,11 +304,10 @@ class HotkeyListener:
     def start(self) -> None:
         factory = self._factory
         if factory is None:
-            try:
-                from pynput import keyboard
-            except ImportError:
-                raise RuntimeError("pynput is not installed: run  pip install pynput  (see docs/01-installation.md)") from None
-            factory = keyboard.Listener
+            self._listener = QuartzTap(self.intercept, listen_only=not self._swallow)
+            self.swallowing = self._swallow
+            self._listener.start()
+            return
         callbacks = dict(on_press=self.matcher.press, on_release=self.matcher.release)
         if self._swallow:
             try:

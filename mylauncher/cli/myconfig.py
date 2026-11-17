@@ -132,7 +132,22 @@ class Config:
     secret_file: Path = Path("~/.config/mylauncher/secrets.env").expanduser()  # outside the repository!
     secret_clear_seconds: int = 30  # the clipboard is emptied this long after copying a secret (0 = never)
     secret_service: str = "justtothepoint-toolkit"  # Keychain service name (the one openrouter.py --set-key uses)
+    secret_input_echo: str = "hidden"  # ml secret-set: "hidden" (nothing shown), "asterisks" (*****) or "visible" (the characters)
+    secret_notify_value: bool = True  # the notification after copying a secret shows the value
     secret_reveal: int = 4  # how many last characters of a value stay visible in the list (0 = none)
+    aerospace_enabled: bool = False  # is AeroSpace on this Mac? then opening an app also goes to its workspace
+    aerospace_command: str = "aerospace"
+    aerospace_config: Path = Path("~/.config/aerospace/aerospace.toml").expanduser()
+    aerospace_workspaces: tuple = ()  # (("Visual Studio Code", "C"), ...)
+    screenshot_dir: str = "auto"
+    screenshot_clipboard: bool = False
+    screenshot_delay: int = 1
+    weather_location: str = ""
+    weather_format: str = "%c+%t"
+    weather_timeout: int = 6
+    power_force: bool = True
+    power_grace: int = 8
+    power_lock: Path | None = Path("~/Library/Application Support/mylauncher/power.lock").expanduser()
     notify_method: str = "auto"  # auto, osascript, terminal-notifier, none
     toast: bool = False  # OFF by default (step 9f): an extra Cocoa window; the macOS notification is the reliable message. The launcher's own little message after an action (works without any macOS permission)
     toast_seconds: float = 2.0
@@ -269,6 +284,33 @@ def parse_config(data, path: Path) -> Config:
                 description=_check(entry.get("description", ""), str, f"{where}.description").strip(),
             )
         )
+
+    # ---- aerospace and screenshot (optional) ---------------------------------
+    aero = _check(data.get("aerospace", {}), dict, "aerospace")
+    aero_enabled = _check(aero.get("enabled", False), bool, "aerospace.enabled")
+    aero_command = _check(aero.get("command", "aerospace"), str, "aerospace.command").strip() or "aerospace"
+    aero_config = Path(_check(aero.get("config", ""), str, "aerospace.config").strip() or _check(data.get("help", {}), dict, "help").get("aerospace_config", "~/.config/aerospace/aerospace.toml")).expanduser()
+    raw_workspaces = _check(aero.get("workspaces", {}), dict, "aerospace.workspaces")
+    aero_workspaces = tuple((str(app), _check(ws, str, f"aerospace.workspaces.{app}").strip()) for app, ws in raw_workspaces.items())
+    power = _check(data.get("power", {}), dict, "power")
+    power_force = _check(power.get("force", True), bool, "power.force")
+    power_grace = _check(power.get("grace_seconds", 8), int, "power.grace_seconds")
+    if not 0 <= power_grace <= 60:
+        raise ConfigError("power.grace_seconds must be between 0 and 60")
+    lock_text = _check(power.get("lock_file", "~/Library/Application Support/mylauncher/power.lock"), str, "power.lock_file")
+    power_lock = Path(lock_text).expanduser() if lock_text.strip() else None
+    weather_section = _check(data.get("weather", {}), dict, "weather")
+    weather_location = _check(weather_section.get("location", ""), str, "weather.location").strip()
+    weather_format = _check(weather_section.get("format", "%c+%t"), str, "weather.format").strip() or "%c+%t"
+    weather_timeout = _check(weather_section.get("timeout_seconds", 6), int, "weather.timeout_seconds")
+    if not 1 <= weather_timeout <= 30:
+        raise ConfigError("weather.timeout_seconds must be between 1 and 30")
+    shot = _check(data.get("screenshot", {}), dict, "screenshot")
+    shot_dir = _check(shot.get("directory", "auto"), str, "screenshot.directory").strip() or "auto"
+    shot_clip = _check(shot.get("clipboard", False), bool, "screenshot.clipboard")
+    shot_delay = _check(shot.get("delay_seconds", 1), int, "screenshot.delay_seconds")
+    if not 0 <= shot_delay <= 30:
+        raise ConfigError("screenshot.delay_seconds must be between 0 and 30")
 
     # ---- window (optional: every value has a default) -----------------------
     window = data.get("window", {})
@@ -412,6 +454,10 @@ def parse_config(data, path: Path) -> Config:
     clear_seconds = _check(secret_section.get("clear_seconds", 30), int, "secret.clear_seconds")
     secret_service = _check(secret_section.get("keychain_service", "justtothepoint-toolkit"), str, "secret.keychain_service")
     reveal = _check(secret_section.get("reveal_chars", 4), int, "secret.reveal_chars")
+    input_echo = _check(secret_section.get("input_echo", "hidden"), str, "secret.input_echo").lower()
+    if input_echo not in ("hidden", "asterisks", "visible"):
+        raise ConfigError('secret.input_echo must be "hidden", "asterisks" or "visible"')
+    notify_value = _check(secret_section.get("notify_value", True), bool, "secret.notify_value")
     if clear_seconds < 0 or reveal < 0:
         raise ConfigError("secret.clear_seconds and secret.reveal_chars cannot be negative (0 = off)")
 
@@ -475,6 +521,19 @@ def parse_config(data, path: Path) -> Config:
         expander_enabled=expander_enabled,
         expander_folder=expander_folder,
         expander_strip_cursor=strip_cursor,
+        aerospace_enabled=aero_enabled,
+        aerospace_command=aero_command,
+        aerospace_config=aero_config,
+        aerospace_workspaces=aero_workspaces,
+        power_force=power_force,
+        power_grace=power_grace,
+        power_lock=power_lock,
+        screenshot_dir=shot_dir,
+        screenshot_clipboard=shot_clip,
+        screenshot_delay=shot_delay,
+        weather_location=weather_location,
+        weather_format=weather_format,
+        weather_timeout=weather_timeout,
         expander_notify=notify,
         expander_paste=paste,
         expander_paste_delay_ms=paste_delay,
@@ -494,6 +553,8 @@ def parse_config(data, path: Path) -> Config:
         secret_file=secret_file,
         secret_clear_seconds=clear_seconds,
         secret_reveal=reveal,
+        secret_input_echo=input_echo,
+        secret_notify_value=notify_value,
         secret_service=secret_service,
         notify_method=notify_method,
         toast=toast,

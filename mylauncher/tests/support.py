@@ -33,6 +33,8 @@ def good_config(folders=(), **changes) -> dict:
     data.update(changes)
     if isinstance(data.get("expander", {}), dict):
         data["expander"] = {"copy_log": "", "paste": False, **data.get("expander", {})}
+    if isinstance(data.get("power", {}), dict):
+        data["power"] = {"lock_file": "", **data.get("power", {})}  # no marker file in the real ~/Library
     if isinstance(data.get("notifications", {}), dict):
         data["notifications"] = {"toast": True, **data.get("notifications", {})}  # the toast is off by default; most window tests want it on  # tests never write into the real ~/Library/Logs
     return data

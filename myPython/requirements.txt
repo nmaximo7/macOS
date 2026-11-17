@@ -62,7 +62,7 @@ more-itertools==11.2.1
     # via
     #   jaraco-classes
     #   jaraco-functools
-numpy==2.5.4
+numpy==2.5.5
     # via
     #   pandas
     #   yfinance

@@ -114,12 +114,31 @@ def run(config, config_path, show: bool) -> int:
         return 1
     from mywindow import LauncherWindow  # imported here because it needs tkinter
 
+    import myinstance
+
+    lock, other = myinstance.acquire(config.usage_file.parent / "app.lock")
+    if lock is None:
+        print(f"mylauncher is already running (pid {other}); this second copy ends. To restart it: mlauto restart", flush=True)
+        return 0
+
     print(f"python: {sys.executable}", flush=True)  # these lines go to the log file when started at login
     print_permissions()
     root = tk.Tk()
     root.withdraw()  # start hidden: the hotkey shows it
     window = LauncherWindow(root, Engine(config_path=config_path), config)
-    protect_from_closing(root, window, log=lambda text: print(text, flush=True))
+    import mypoweroff
+    from mypower import already_asked
+
+    leaving = {"now": False}
+
+    def power_off_started() -> None:
+        print("[app] the Mac is restarting / shutting down / logging out: leaving at once", flush=True)
+        leaving["now"] = True
+        os._exit(0)  # no clean-up needed, and nothing may delay the restart
+
+    power_watch = mypoweroff.watch(power_off_started)  # keep the reference: the observer lives as long as this variable
+    protect_from_closing(root, window, log=lambda text: print(text, flush=True),
+                         may_quit=lambda: leaving["now"] or already_asked(config.power_lock))
 
     messages: queue.Queue = queue.Queue()
     listener = HotkeyListener(config.hotkey_modifiers, config.hotkey_key, lambda: (print("[hotkey] pressed", flush=True), messages.put("toggle")), swallow=config.hotkey_swallow)
@@ -196,7 +215,7 @@ def run(config, config_path, show: bool) -> int:
     return 0
 
 
-def protect_from_closing(root, window, log=print) -> None:
+def protect_from_closing(root, window, log=print, may_quit=lambda: False) -> None:
     """The program must only end when the user chooses "Quit" in the menu bar icon.
 
     Found on a real Mac (step 9i): after an action the program ended with exit code 0 and launchd, which restarts only
@@ -208,6 +227,10 @@ def protect_from_closing(root, window, log=print) -> None:
         window.hide()
 
     def ignore_quit(*_):
+        if may_quit():  # the Mac is restarting / shutting down / logging out: do not be the one that says "no"
+            log("[app] a QUIT request from macOS during a restart / shutdown: leaving")
+            root.quit()
+            return
         log("[app] a QUIT request from macOS was ignored (use the menu bar icon > Quit mylauncher to quit)")
 
     root.protocol("WM_DELETE_WINDOW", ignore_close)

@@ -62,6 +62,7 @@ class Secret:
     comment: str = ""
     source: str = "file"  # "file" or "keychain"
     problem: str = ""  # why a Keychain value could not be read
+    notes: str = ""  # private_notes: any number of lines
 
 
 def parse_value(text: str) -> str:
@@ -72,7 +73,34 @@ def parse_value(text: str) -> str:
     return re.split(r"\s+#", text, maxsplit=1)[0].strip()  # an unquoted value ends at " #comment"
 
 
+NOTES_BLOCK = re.compile(r'^([A-Za-z_][A-Za-z0-9_.-]*)\.private_notes[ \t]*=[ \t]*"""[ \t]*\n(.*?)\n?"""[ \t]*$', re.M | re.S)
+NOTES_LINE = re.compile(r'^([A-Za-z_][A-Za-z0-9_.-]*)\.private_notes[ \t]*=(.*)$', re.M)
+
+
+def split_notes(text: str) -> tuple:
+    """(text without the notes, {NAME: notes}). Notes are  NAME.private_notes=\"\"\"  lines...  \"\"\"  (or one line with \\n)."""
+    notes = {}
+
+    def block(m):
+        notes[m.group(1)] = m.group(2)
+        return ""
+
+    text = NOTES_BLOCK.sub(block, text)
+
+    def line(m):
+        notes[m.group(1)] = parse_value(m.group(2)).replace("\\n", "\n")
+        return ""
+
+    return NOTES_LINE.sub(line, text), notes
+
+
 def parse_secrets(text: str) -> list:
+    text, notes = split_notes(text)
+    found = parse_all(text)
+    return [Secret(s.name, s.value, s.comment, s.source, s.problem, notes.get(s.name, "")) for s in found]
+
+
+def parse_all(text: str) -> list:
     lines = text.splitlines()
     found = []
     for index, line in enumerate(lines):
@@ -130,7 +158,7 @@ def read_secrets(path, runner=None, service: str = "") -> tuple:
         for s in found:
             if s.value.lower() in KEYCHAIN_WORDS:
                 value, problem = keychain_get(runner, service, s.name)
-                s = Secret(s.name, value, s.comment, "keychain", problem)
+                s = Secret(s.name, value, s.comment, "keychain", problem, s.notes)
             filled.append(s)
         found = filled
     return found, ""
@@ -181,6 +209,16 @@ def ensure_file(path) -> tuple:
     return path, ", ".join(done)
 
 
+def indent_notes(notes: str) -> str:
+    return "\n".join("    │ " + line for line in notes.splitlines())
+
+
+def vault_text(secrets: list) -> str:
+    """The private_vault: every entry that has private_notes, with its notes."""
+    blocks = [f"{s.name}\n{indent_notes(s.notes)}" for s in secrets if s.notes]
+    return "\n\n".join(blocks) if blocks else "(no private_notes yet: add them with  ml secret-notes NAME,  or edit the file with keep_secret)"
+
+
 def table(secrets: list) -> str:
     """Everything, unmasked, aligned: what the "all" row shows."""
     if not secrets:
@@ -189,7 +227,8 @@ def table(secrets: list) -> str:
     blocks = []
     for s in secrets:
         head = f"# {s.comment.splitlines()[0]}\n" if s.comment else ""
-        blocks.append(f"{head}{s.name:<{width}} = " + (f"({s.problem})" if s.problem else s.value))
+        notes = ("\n" + indent_notes(s.notes)) if s.notes else ""
+        blocks.append(f"{head}{s.name:<{width}} = " + (f"({s.problem})" if s.problem else s.value) + notes)
     return "\n\n".join(blocks)
 
 
@@ -208,14 +247,18 @@ def build_secret_items(config, runner=None) -> list:
     items.append(Item(id="secret:*all*", title="all", kind="secret", action="copy_secret", target=table(secrets),
                       subtitle=f"every value of {path}, visible (Enter)", detail=f"{path}\n\n{table(secrets)}", icon="🔓", badge="Show all",
                       complete=f"{config.secret_word} all"))
+    items.append(Item(id="secret:*vault*", title="private_vault", kind="secret", action="copy_secret", target=vault_text(secrets),
+                      subtitle=f"the private_notes of {sum(1 for s in secrets if s.notes)} entries (Enter)", detail=vault_text(secrets), icon="🗄️",
+                      badge="Vault", complete=f"{config.secret_word} private_vault"))
     for s in secrets:
         if s.problem:  # a Keychain value that could not be read: a hint row, nothing to copy
             items.append(Item(id=f"secret-problem:{s.name}", title=s.name, kind="prefix", action="prefix_hint", complete=f"{config.secret_word} {s.name}",
                               subtitle=f"🔒 Keychain: {s.problem}", keywords=(s.comment,) if s.comment else (), icon="⚠️", badge="Keychain"))
             continue
-        subtitle = ("🔒 " if s.source == "keychain" else "") + mask(s.value, config.secret_reveal) + (f"   # {s.comment.splitlines()[0]}" if s.comment else "")
+        subtitle = ("📝 " if s.notes else "") + ("🔒 " if s.source == "keychain" else "") + mask(s.value, config.secret_reveal) + (f"   # {s.comment.splitlines()[0]}" if s.comment else "")
         where = "\n(stored in the macOS Keychain)" if s.source == "keychain" else ""
-        detail = f"{s.name}\n" + (f"# {s.comment}\n" if s.comment else "") + f"\n{s.value}\n{where}".rstrip()
+        detail = f"{s.name}\n" + (f"# {s.comment}\n" if s.comment else "") + f"\n{s.value}\n{where}" + (f"\n\nprivate_notes:\n{s.notes}" if s.notes else "")
+        detail = detail.rstrip()
         items.append(Item(id=f"secret:{s.name}", title=s.name, kind="secret", action="copy_secret", target=s.value, subtitle=subtitle,
                           detail=detail, keywords=(s.comment,) if s.comment else (), icon="🔑", badge="Secret",
                           complete=f"{config.secret_word} {s.name}"))
@@ -227,3 +270,14 @@ def edit_item(config) -> Item:
     return Item(id="cmd:keep_secret", title=config.secret_edit_word, kind="command", action="edit_secret", target=str(Path(config.secret_file).expanduser()),
                 keywords=("secret", "api key", "edit"), subtitle=f"Edit {path} (created with safe permissions if missing)", icon="🔐",
                 complete=config.secret_edit_word)
+
+
+def set_notes(path, name: str, notes: str) -> None:
+    """Write (or replace) the private_notes block of NAME in the file; empty notes remove it."""
+    path, _ = ensure_file(path)
+    text, _old = path.read_text(encoding="utf-8"), None
+    text = re.sub(r'^' + re.escape(name) + r'\.private_notes[ \t]*=[ \t]*"""[ \t]*\n.*?\n?"""[ \t]*\n?', "", text, flags=re.M | re.S)
+    text = re.sub(r'^' + re.escape(name) + r'\.private_notes[ \t]*=.*\n?', "", text, flags=re.M)
+    if notes.strip():
+        text = text.rstrip("\n") + f'\n{name}.private_notes="""\n{notes.strip(chr(10))}\n"""\n'
+    path.write_text(text, encoding="utf-8")

@@ -222,14 +222,59 @@ class Hotkey(unittest.TestCase):
         self.assertTrue(made["obj"].stopped)
         listener.stop()  # stopping twice is harmless
 
-    def test_missing_pynput_gives_a_helpful_error(self):
+    def test_default_listener_is_our_own_quartz_tap_not_pynput(self):
+        """pynput's Listener can kill Python on recent macOS: the default must not touch it (here: no Quartz, so a clear error)."""
         import sys
         from unittest import mock
 
-        with mock.patch.dict(sys.modules, {"pynput": None}):  # None makes "import pynput" fail
+        with mock.patch.dict(sys.modules, {"pynput": None, "Quartz": None}):
             with self.assertRaises(RuntimeError) as ctx:
                 HotkeyListener(("command",), "d", lambda: None).start()
-        self.assertIn("pip install pynput", str(ctx.exception))
+        self.assertIn("keyboard tap", str(ctx.exception))
+
+    def test_tap_switched_off_by_macos_is_switched_on_again(self):
+        import sys
+        from unittest import mock
+        from myhotkey import QuartzTap
+
+        seen = []
+        fake = mock.MagicMock()
+        tap = QuartzTap(lambda t, e: seen.append(t) or e)
+        tap._tap = "tap"
+        captured = {}
+        fake.CGEventTapCreate.side_effect = lambda *a: captured.setdefault("cb", a[4]) and "tap"
+        fake.CFRunLoopRun.side_effect = lambda: captured["cb"](None, 0xFFFFFFFE, "ev", None)
+        with mock.patch.dict(sys.modules, {"Quartz": fake}):
+            tap._ready = __import__("threading").Event()
+            tap._run()
+        fake.CGEventTapEnable.assert_called_with("tap", True)
+        self.assertEqual(seen, [0xFFFFFFFE])
+
+
+class TapStopSafety(unittest.TestCase):
+    def test_a_disabled_event_after_stop_never_touches_a_cleared_tap(self):
+        """The crash of 2026-11-17 12:28: CGEventTapEnable(None, True) is a segfault."""
+        import sys, threading
+        from unittest import mock
+        from myhotkey import QuartzTap
+
+        fake = mock.MagicMock()
+        captured = {}
+        fake.CGEventTapCreate.side_effect = lambda *a: captured.setdefault("cb", a[4]) and "tap"
+        tap = QuartzTap(lambda t, e: e)
+
+        def run_loop():
+            tap.stop()  # stop() arrives while macOS still delivers events
+            captured["cb"](None, 0xFFFFFFFE, "ev", None)
+            captured["cb"](None, 0xFFFFFFFF, "ev", None)
+
+        fake.CFRunLoopRun.side_effect = run_loop
+        with mock.patch.dict(sys.modules, {"Quartz": fake}):
+            tap._ready = threading.Event()
+            tap._run()
+        for call in fake.CGEventTapEnable.call_args_list:
+            self.assertIsNotNone(call.args[0])
+        self.assertNotIn(mock.call("tap", True), fake.CGEventTapEnable.call_args_list[1:])  # not re-enabled after stop
 
 
 class Swallow(unittest.TestCase):

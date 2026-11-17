@@ -454,16 +454,20 @@ class Toasts(Window):
         window = LauncherWindow(self.root, self.engine, config, front=lambda: None, style=lambda *a: True)
         self.assertIsNone(window.toast)
 
-    def test_a_secret_row_opens_its_detail_then_copies(self):
+    def test_a_named_secret_is_copied_with_one_enter(self):
         self.engine.ITEMS = [self.SECRET_ROW]
         self.engine.run_results = [RunResult(True, "KEY copied to the clipboard (the clipboard is emptied in 30 s)")]
         self.window.show()
         self.window._run_selected()
-        self.assertIn("sk-the-whole-value", self.window.detail.content())
-        self.assertEqual(self.engine.ran, [])
-        self.window._run_selected()
         self.assertEqual(self.engine.ran, ["secret:KEY"])
         self.assertIn("KEY copied", self.window.toast.window.winfo_children()[0].cget("text"))
+
+    def test_the_all_row_still_opens_its_detail_first(self):
+        self.engine.ITEMS = [dict(self.SECRET_ROW, id="secret:*all*", title="all")]
+        self.window.show()
+        self.window._run_selected()
+        self.assertIn("sk-the-whole-value", self.window.detail.content())
+        self.assertEqual(self.engine.ran, [])
 
     def test_the_masked_row_never_contains_the_value(self):
         self.engine.ITEMS = [self.SECRET_ROW]

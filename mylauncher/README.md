@@ -3,7 +3,7 @@
 A small launcher for macOS in the spirit of Raycast or Alfred, built **slowly, in Python, for learning**.
 Press a hotkey (default **Command+D**), type, see suggestions, press Enter.
 
-> Install: `bash setup.sh` (one command). Status: **step 9 of N**. Step 9: `secret` / `keep_secret` (your secret file), reliable notifications (`ml notify-test`) and an on-screen toast. Step 8: `edit` (open your config files in your editor) and `execute` (run your own commands). Step 7: `help` (aliases, functions, AeroSpace keys, scripts...), `ml report`, troubleshooting guide. Step 6: Raycast-like window, `run`/`;` lists, hotkey swallowed, searches in a new Zen tab. Engine, command line, tkinter window, Command+D hotkey, start at login, most-used-first, quicklinks, `kill`, the menu bar icon and Espanso snippets are built; see `docs/04-journal.md`.
+> Install: `bash setup.sh` (one command). Status: **step 10 of N**. Step 10: apps open on their AeroSpace workspace, `reboot`, `screenshot full_screen|region` + `help screenshot`. Step 9: `secret` / `keep_secret` (your secret file), reliable notifications (`ml notify-test`) and an on-screen toast. Step 8: `edit` (open your config files in your editor) and `execute` (run your own commands). Step 7: `help` (aliases, functions, AeroSpace keys, scripts...), `ml report`, troubleshooting guide. Step 6: Raycast-like window, `run`/`;` lists, hotkey swallowed, searches in a new Zen tab. Engine, command line, tkinter window, Command+D hotkey, start at login, most-used-first, quicklinks, `kill`, the menu bar icon and Espanso snippets are built; see `docs/04-journal.md`.
 
 ## Layout
 

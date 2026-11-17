@@ -35,7 +35,7 @@ rm -rf .venv
 "$py" -m venv .venv || stop "could not create .venv"
 .venv/bin/pip install --quiet --upgrade pip
 .venv/bin/pip install --quiet -r app/requirements.txt || stop "pip install failed (is the internet working?)"
-.venv/bin/python -c "import pynput, yaml, AppKit; print('pynput, PyYAML and PyObjC import fine')" || stop "a library does not import"
+.venv/bin/python -c "import pynput, yaml, AppKit, Quartz; print('pynput, PyYAML and PyObjC import fine')" || stop "a library does not import"
 
 step "4/6  Make the scripts executable"
 chmod a+x setup.sh cli/ml cli/mylauncher.py app/mylauncher-app app/mylauncher_app.py app/mylauncher-autostart app/myautostart.py
@@ -49,8 +49,9 @@ real="$(.venv/bin/python -c 'import os, sys; print(os.path.realpath(sys.executab
 printf '%s' "$real" | pbcopy 2>/dev/null
 cat <<EOF
 
-Add THIS program (its path is already in your clipboard) to BOTH lists in
+Add THIS program (its path is already in your clipboard) to these lists in
 System Settings > Privacy & Security:   Accessibility   and   Input Monitoring
+(and, for the screenshot commands, later:   Screen & System Audio Recording)
 (press +, then Cmd+Shift+G, paste the path, Open, switch it on):
 
     $real

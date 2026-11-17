@@ -60,6 +60,7 @@ TOPICS = {
     "scripts": ("📜", "The scripts folder: what each script is for", "Script"),
     "system": ("🖥️", "This Mac: macOS, chip, memory, disk, versions", "System"),
     "launcher": ("🚀", "What mylauncher itself understands", "Launcher"),
+    "screenshot": ("📸", "Screenshots: the macOS shortcuts and the launcher commands", "Screenshot"),
 }
 # Other names that mean the same topic (you wrote "help zsh_alias" and "help zsh_functions").
 SYNONYMS = {
@@ -67,7 +68,7 @@ SYNONYMS = {
     "function": "functions", "func": "functions", "zsh_function": "functions", "zsh_functions": "functions",
     "aero": "aerospace", "wm": "aerospace",
     "snippets": "espanso", "snippet": "espanso", "text": "espanso",
-    "skill": "skills",
+    "skill": "skills", "screenshots": "screenshot", "screen": "screenshot", "capture": "screenshot", "shots": "screenshot",
     "key": "keys", "keyboard": "keys", "shortcuts": "keys", "cheatsheets": "keys", "sections": "keys",
     "script": "scripts",
     "sys": "system", "info": "system", "mac": "system",
@@ -377,7 +378,10 @@ def launcher_rows(config, runner) -> tuple:
         Row("help", config.help_word, "this help", f"{config.help_word}              the topics\n{config.help_word} aliases      a topic\n{config.help_word} functions x  a topic, filtered by x", ""),
         Row("edit", config.edit_word, "open a file in your editor", f"{config.edit_word} <name>   opens a file of edit.json in the editor ({' '.join(config.edit_editor)})", ""),
         Row("execute", config.execute_word, "run one of your commands", f"{config.execute_word} <name>   runs a command of execute.json (in a terminal or in the background)", ""),
-        Row("secret", config.secret_word, "your secrets, values hidden", f"{config.secret_word}   the entries of the secret file; Enter shows one, Enter again copies it (the clipboard is emptied after {config.secret_clear_seconds} s)\n{config.secret_edit_word}   opens the file in the editor", ""),
+        Row("secret", config.secret_word, "your secrets, values hidden", f"{config.secret_word} google   copies the value and shows it in the notification\n{config.secret_word} private_vault   the private_notes of every entry\n{config.secret_word}   the entries of the secret file; Enter shows one, Enter again copies it (the clipboard is emptied after {config.secret_clear_seconds} s)\n{config.secret_edit_word}   opens the file in the editor", ""),
+        Row("screenshot", "screenshot", "full_screen or region", "screenshot full_screen   the whole screen\nscreenshot region        drag to choose an area\nhelp screenshot          the macOS shortcuts (⇧⌘3, ⇧⌘4, ⇧⌘5)", ""),
+        Row("weather", "weather", "the weather now (wttr.in)", "weather   one line (icon and temperature) in a notification; place and format: the \"weather\" section of the configuration", ""),
+        Row("reboot", "reboot", "restart the Mac (asks first)", "reboot   asks, then restarts the Mac", ""),
         Row("snippets", ";", "snippet groups, then snippets", "; lists the groups; ;p the snippets of the group ;p. Enter copies the text.", ""),
     ]
     for link in config.quicklinks:
@@ -387,9 +391,34 @@ def launcher_rows(config, runner) -> tuple:
     return rows, ""
 
 
+# --------------------------------------------------------------------------- #
+# screenshot (the shortcuts of macOS: a fixed list, because they are the SYSTEM's, not yours)
+# --------------------------------------------------------------------------- #
+SHORTCUTS = (
+    ("⇧⌘3", "Whole screen, saved as a file", "Shift + Command + 3.\nHold Control as well (⌃⇧⌘3) to copy it to the clipboard instead of saving a file."),
+    ("⇧⌘4", "A region (drag a rectangle)", "Shift + Command + 4, then drag the crosshair over the area.\nEsc cancels. While dragging: Space moves the area, Shift locks one side, Option resizes from the centre.\nControl as well (⌃⇧⌘4) copies to the clipboard."),
+    ("⇧⌘4 then Space", "One window", "Shift + Command + 4, press Space (the cross becomes a camera), click the window.\nHold Option while clicking to leave out the window's shadow."),
+    ("⇧⌘5", "The screenshot toolbar", "Shift + Command + 5 opens the toolbar: whole screen, window, region, screen recording, a timer, and Options (where to save, show the pointer...)."),
+    ("Esc", "Cancel", "Escape cancels a capture you started."),
+)
+
+
+def screenshot_rows(config, runner) -> tuple:
+    where = "the place macOS uses (Desktop unless you changed it)" if config.screenshot_dir == "auto" else config.screenshot_dir
+    target = "the clipboard" if config.screenshot_clipboard else where
+    rows = [
+        Row("full", "screenshot full_screen", f"launcher: the whole screen after {config.screenshot_delay} s", f"Type  screenshot full_screen  and press Enter.\nThe window hides, {config.screenshot_delay} s later the whole screen is captured -> {target}.\nSame as ⇧⌘3.", ""),
+        Row("region", "screenshot region", "launcher: drag to choose an area", f"Type  screenshot region  and press Enter.\nThe cross appears: drag over the area (Esc cancels) -> {target}.\nSame as ⇧⌘4.", ""),
+    ]
+    rows += [Row(f"key:{key}", key, what, f"{key}   {what}\n\n{text}", "") for key, what, text in SHORTCUTS]
+    rows.append(Row("perm", "first time: permission", "System Settings > Privacy & Security > Screen Recording",
+                    "The launcher takes the picture with the macOS program `screencapture`. The first time, macOS may ask to allow Screen Recording for python:\nSystem Settings > Privacy & Security > Screen & System Audio Recording > add the python path that setup.sh printed.\nThe keyboard shortcuts above need no permission.", ""))
+    return rows, ""
+
+
 LOADERS = {
     "aliases": alias_rows, "functions": function_rows, "aerospace": aerospace_rows, "espanso": espanso_rows,
-    "skills": skill_rows, "keys": keys_rows, "scripts": script_rows, "system": system_rows, "launcher": launcher_rows,
+    "skills": skill_rows, "keys": keys_rows, "scripts": script_rows, "system": system_rows, "launcher": launcher_rows, "screenshot": screenshot_rows,
 }
 
 

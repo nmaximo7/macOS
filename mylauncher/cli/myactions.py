@@ -26,6 +26,7 @@ import os
 import shlex
 import subprocess
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -33,12 +34,14 @@ from myexecute import DEFAULT_SHELL, DEFAULT_SOURCE, DEFAULT_TERMINAL_COMMAND, b
 import hashlib
 
 import mynotify
+import myaerospace
+import mypower
 from mysecret import ensure_file
 from mykill import alive, applescript_quote, running_apps
 from mytypes import Item
 
 # Actions that a "command" in the configuration file may use. (Apps always use open_app.)
-COMMAND_ACTIONS = ("shutdown",)
+COMMAND_ACTIONS = ("shutdown", "reboot", "screenshot_full", "screenshot_region", "weather")
 
 
 @dataclass
@@ -65,6 +68,21 @@ class RunOptions:
     notify: bool = True  # copy_snippet: show a macOS notification
     notify_method: str = "auto"  # how: auto, osascript, terminal-notifier, none (see mynotify.py)
     copy_log: object = None  # copy_snippet: a file that gets one line per copy (None = no log)
+    aerospace: bool = False  # open_app: switch to the workspace of the app first (see myaerospace.py)
+    aerospace_command: str = "aerospace"
+    aerospace_config: object = None  # the aerospace.toml with the [[on-window-detected]] rules
+    aerospace_workspaces: tuple = ()  # (("Visual Studio Code", "C"), ...): your own choices, they win over the toml
+    screenshot_dir: str = "auto"  # "auto" = where macOS saves screenshots (Desktop unless you changed it)
+    screenshot_clipboard: bool = False  # copy to the clipboard instead of saving a file
+    screenshot_delay: int = 1  # full screen: seconds to wait so the launcher window is gone
+    power_force: bool = True  # reboot/shutdown: force quit the applications that refuse to quit (see mypower.py)
+    power_grace: int = 8  # ... after this many seconds
+    power_protected: tuple = ("python",)  # applications never touched: the launcher itself
+    power_lock: object = None  # a marker file that stops a second request within 2 minutes (None = no guard)
+    secret_notify_value: bool = True  # copy_secret: the notification shows the value
+    weather_location: str = ""  # weather: "" = wttr.in guesses it from your address; or "Paris", "Madrid"...
+    weather_format: str = "%c+%t"  # weather: wttr.in format (%c icon, %t temperature, %h humidity, %w wind...)
+    weather_timeout: int = 6  # weather: seconds before giving up
     clear_seconds: int = 30  # copy_secret: empty the clipboard again after this many seconds (0 = never)
     browser_command: tuple = ()  # open_url: ["/…/zen", "-new-tab", "{url}"]; empty = plain `open <url>`
     editor_command: tuple = ("open", "-a", "Visual Studio Code", "{path}")  # edit_file: {path} = the file
@@ -116,17 +134,159 @@ def _execute(command: list, runner, dry_run: bool, done: str) -> ActionResult:
 
 
 def open_app(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
-    """Open the application stored in item.target."""
+    """Open the application stored in item.target (after switching to its AeroSpace workspace, if that is set up)."""
+    options = options or RunOptions()
     command = ["open", item.target]
     if not dry_run and not Path(item.target).exists():
         return ActionResult(False, f"{item.target} does not exist any more (moved or uninstalled?)", command)
-    return _execute(command, runner, dry_run, f"opened {item.title.removeprefix('Run ')}")
+    name = item.title.removeprefix("Run ")
+    workspace, note = _aerospace_workspace(item, name, runner, dry_run, options)
+    result = _execute(command, runner, dry_run, f"opened {name}" + (f" (AeroSpace workspace {workspace})" if workspace and not note else ""))
+    if result.ok and note and not dry_run:
+        result.message += f"  (AeroSpace: {note})"
+    if dry_run and workspace:
+        result.message += f"  and before it: aerospace workspace {workspace}"
+    return result
+
+
+def _aerospace_workspace(item, name: str, runner, dry_run: bool, options) -> tuple:
+    """Switch AeroSpace to the workspace of the app. Returns (workspace, problem); ("", "") when there is nothing to do."""
+    if not options.aerospace:
+        return "", ""
+    rules = []
+    if options.aerospace_config:
+        rules, _ = myaerospace.read_rules(options.aerospace_config)
+    workspace = myaerospace.workspace_for(item.target, name, dict(options.aerospace_workspaces), rules)
+    if not workspace:
+        return "", ""
+    program = myaerospace.find_command(options.aerospace_command)
+    if not program:
+        return workspace, f"the program '{options.aerospace_command}' was not found; the app opened without switching"
+    if dry_run:
+        return workspace, ""
+    try:
+        done = runner(myaerospace.switch_command(program, workspace))
+    except OSError as exc:
+        return workspace, f"could not run it ({exc})"
+    if done.returncode != 0:
+        detail = ((done.stderr or "").strip().splitlines() or [f"exit code {done.returncode}"])[-1]
+        return workspace, f"could not switch to workspace {workspace}: {detail}"
+    return workspace, ""
+
+
+def _power(verb: str, doing: str, runner, dry_run: bool, options) -> ActionResult:
+    """Restart ("restart") or shut down ("shut down") the Mac: see mypower.py for what happens and why."""
+    options = options or RunOptions()
+    final = ["osascript", "-e", f'tell application "System Events" to {verb}']
+    if dry_run:
+        extra = f" first close every application (force quit after {options.power_grace} s)," if options.power_force else ""
+        return ActionResult(True, f"dry run, nothing was done. Would{extra} stop other launcher copies, then run: {shlex.join(final)}", final)
+    apps, duplicates = mypower.plan(runner, options.power_protected, mypower.own_pids())
+    if mypower.already_asked(options.power_lock):
+        return ActionResult(False, f"{verb} was already requested less than {mypower.LOCK_SECONDS // 60} minutes ago; not asking twice", final)
+    mypower.mark_asked(options.power_lock)
+    if duplicates:
+        runner(["kill", "-KILL", *map(str, duplicates)])  # a second copy would ask for the restart a second time
+    if not options.power_force:
+        return _execute(final, runner, False, f"{doing}...")
+    script = mypower.power_script(apps, True, options.power_grace, final)
+    command = ["/bin/sh", "-c", script]
+    spawn = options.spawn or default_spawn
+    try:
+        spawn(command, Path(options.log_dir) / "power.log")
+    except OSError as exc:
+        return ActionResult(False, f"could not start the {verb} sequence: {exc}", command)
+    return ActionResult(True, f"{doing}: closing {len(apps)} application(s), force quit after {options.power_grace} s...", command)
 
 
 def shutdown(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
-    """Ask macOS to shut down (like the Apple menu > Shut Down)."""
-    command = ["osascript", "-e", 'tell application "System Events" to shut down']
-    return _execute(command, runner, dry_run, "shutting down...")
+    """Shut down (like the Apple menu > Shut Down), also when an application refuses to quit."""
+    return _power("shut down", "shutting down", runner, dry_run, options)
+
+
+def reboot(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """Restart (like the Apple menu > Restart), also when an application refuses to quit."""
+    return _power("restart", "restarting", runner, dry_run, options)
+
+
+def _screenshot_folder(options, runner) -> str:
+    """Where files go: the setting, or the place macOS itself uses (`defaults read com.apple.screencapture location`)."""
+    if options.screenshot_dir and options.screenshot_dir != "auto":
+        return str(Path(options.screenshot_dir).expanduser())
+    try:
+        done = runner(["defaults", "read", "com.apple.screencapture", "location"])
+        if done.returncode == 0 and (done.stdout or "").strip():
+            return str(Path((done.stdout or "").strip()).expanduser())
+    except OSError:
+        pass
+    return str(Path("~/Desktop").expanduser())
+
+
+def screenshot_script(region: bool, folder: str, clipboard: bool, delay: int, notify: bool, method: str) -> str:
+    """The shell script that takes the picture (`screencapture`, a program of macOS) and says what happened."""
+    flags = "-i -s" if region else f"-T {int(delay)}"  # region: the mouse chooses the area (Esc cancels); full: after `delay` s
+    lines = [f"folder={shlex.quote(folder)}", 'name="Screenshot $(date \'+%Y-%m-%d at %H.%M.%S\').png"']
+    if clipboard:
+        lines += [f"screencapture -x -c {flags}", "code=$?", 'msg="copied to the clipboard"']
+    else:
+        lines += ['mkdir -p "$folder"', f'screencapture -x {flags} "$folder/$name"', "code=$?", 'msg="saved: $name"',
+                  'if [ "$code" -eq 0 ] && [ ! -e "$folder/$name" ]; then code=1; msg="cancelled (no picture taken)"; fi']
+    lines.append('if [ "$code" -ne 0 ] && [ "$msg" != "cancelled (no picture taken)" ]; then msg="failed (exit $code): is Screen Recording allowed for python?"; fi')
+    if notify:
+        lines.append(mynotify.script_line(method, "Screenshot"))
+    lines.append('exit "$code"')
+    return "\n".join(lines)
+
+
+def _screenshot(region: bool, item: Item, runner, dry_run: bool, options) -> ActionResult:
+    options = options or RunOptions()
+    folder = _screenshot_folder(options, runner)
+    script = screenshot_script(region, folder, options.screenshot_clipboard, options.screenshot_delay, options.notify, options.notify_method)
+    command = ["/bin/sh", "-c", script]
+    where = "the clipboard" if options.screenshot_clipboard else folder
+    what = "drag to choose the area (Esc cancels)" if region else f"full screen in {options.screenshot_delay} s"
+    if dry_run:
+        return ActionResult(True, f"dry run, nothing was done. Would take a screenshot: {what} -> {where}", command)
+    spawn = options.spawn or default_spawn  # not waited for: choosing an area takes as long as the user needs
+    try:
+        spawn(command, Path(options.log_dir) / "screenshot.log")
+    except OSError as exc:
+        return ActionResult(False, f"could not start screencapture: {exc}", command)
+    return ActionResult(True, f"screenshot: {what} -> {where}", command)
+
+
+def screenshot_full(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    return _screenshot(False, item, runner, dry_run, options)
+
+
+def screenshot_region(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    return _screenshot(True, item, runner, dry_run, options)
+
+
+def weather_url(location: str, fmt: str) -> str:
+    """https://wttr.in/Paris?format=%c+%t  (the location may be empty; spaces become +)."""
+    return "https://wttr.in/" + urllib.parse.quote(location.strip().replace(" ", "+"), safe="+,~") + "?format=" + fmt
+
+
+def weather(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """The same as  curl -s "wttr.in/?format=%c+%t"  : one line with the weather, shown in a notification."""
+    options = options or RunOptions()
+    command = ["curl", "-s", "-f", "--max-time", str(int(options.weather_timeout)), weather_url(options.weather_location, options.weather_format)]
+    if dry_run:
+        return ActionResult(True, "dry run, nothing was done. Would ask wttr.in: " + " ".join(command), command)
+    try:
+        done = runner(command)
+    except FileNotFoundError:
+        return ActionResult(False, "the program 'curl' was not found", command)
+    text = " ".join((done.stdout or "").split())
+    if done.returncode != 0 or not text or text.lower().startswith(("unknown location", "<")):
+        return ActionResult(False, f"no weather (curl exit code {done.returncode}): is the Mac online? {text[:60]}".strip(), command)
+    if options.notify:
+        place = options.weather_location.strip() or "here"
+        ok, detail = mynotify.send(runner, options.notify_method, "mylauncher", f"Weather ({place})", text)
+        if not ok:
+            text += f"  (notification failed: {detail})"
+    return ActionResult(True, text, command)
 
 
 def open_url(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
@@ -308,7 +468,12 @@ def copy_secret(item: Item, runner=default_runner, dry_run: bool = False, option
         except OSError:
             message += " (could not schedule emptying the clipboard)"
     if options.notify:
-        ok, detail = mynotify.send(runner, options.notify_method, "mylauncher", f"{item.title} copied", f"The clipboard is emptied in {options.clear_seconds} s" if options.clear_seconds else "")
+        shown = item.target if options.secret_notify_value else ""
+        if shown and item.id == "secret:*all*":
+            shown = ""  # the "all" table is too long for a notification
+        tail = f"(clipboard emptied in {options.clear_seconds} s)" if options.clear_seconds else ""
+        body = (shown.splitlines()[0] if shown else "") or tail
+        ok, detail = mynotify.send(runner, options.notify_method, "mylauncher", f"{item.title} copied", body)
         if not ok:
             message += f"  (notification failed: {detail})"
     return ActionResult(True, message, command)
@@ -409,6 +574,10 @@ ACTIONS = {
     "execute_terminal": execute_terminal,
     "open_app": open_app,
     "shutdown": shutdown,
+    "reboot": reboot,
+    "weather": weather,
+    "screenshot_full": screenshot_full,
+    "screenshot_region": screenshot_region,
     "open_url": open_url,
     "kill_app": kill_app,
     "prefix_hint": prefix_hint,

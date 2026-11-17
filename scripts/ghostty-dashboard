@@ -58,10 +58,10 @@ fi
 # split-window -h: -h means horizontal split, which arranges panes side by side (kind of confusing)
 # -t "$SESSION:main": target = the active pane of window main. 
 # 'btop' is passed to default-shell -c.  
-if command -v btop >/dev/null 2>&1; then
-  tmux split-window -h -t "$SESSION:main" 'btop'
+if command -v cmatrix >/dev/null 2>&1; then
+  tmux split-window -h -t "$SESSION:main" 'cmatrix'
 else
-  tmux split-window -h -t "$SESSION:main" 'echo "btop is not installed"; exec zsh'
+  tmux split-window -h -t "$SESSION:main" 'echo "cmatrix is not installed"; exec zsh'
 fi
 
 # 7. Pane titles and focus.

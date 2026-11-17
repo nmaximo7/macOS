@@ -54,11 +54,11 @@ class Opening(support.TempDirCase):
 class Shutdown(unittest.TestCase):
     ITEM = Item("cmd:shutdown", "Shutdown", "command", "shutdown", confirm=True)
 
-    def test_uses_system_events(self):
+    def test_the_polite_way_uses_system_events_directly(self):
         runner = support.FakeRunner()
-        self.assertTrue(run_item(self.ITEM, runner=runner).ok)
-        self.assertEqual(runner.calls[0][0], "osascript")
-        self.assertIn("shut down", runner.calls[0][-1])
+        self.assertTrue(run_item(self.ITEM, runner=runner, options=RunOptions(power_force=False)).ok)
+        self.assertEqual(runner.calls[-1][0], "osascript")
+        self.assertIn("shut down", runner.calls[-1][-1])
 
     def test_dry_run_does_not_shut_down(self):
         runner = support.FakeRunner()

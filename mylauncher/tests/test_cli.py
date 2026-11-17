@@ -138,14 +138,15 @@ class Confirmation(CliCase):
         for answer in ("y", "YES"):
             self.runner.calls.clear()
             with self.subTest(answer=answer):
+                self.spawned.clear()
                 code, _, _ = self.call("run", "shutdown", answers=[answer])
                 self.assertEqual(code, 0)
-                self.assertEqual(self.runner.calls[0][0], "osascript")
+                self.assertIn('to shut down', self.spawned[0][0][2])  # the sequence of mypower.py, started in the background
 
     def test_dash_dash_yes_skips_the_question(self):
         code, _, _ = self.call("run", "--id", "cmd:shutdown", "--yes")
         self.assertEqual(code, 0)
-        self.assertEqual(self.runner.calls[0][0], "osascript")
+        self.assertIn('to shut down', self.spawned[0][0][2])
 
     def test_dry_run_does_not_ask(self):
         code, out, _ = self.call("run", "shutdown", "--dry-run")

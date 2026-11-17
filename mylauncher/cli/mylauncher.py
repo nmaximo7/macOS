@@ -52,7 +52,7 @@ import myespanso
 from myexpander import describe_groups, group_of, load_snippets, preview
 from myedit import build_edit_items
 from myexecute import build_execute_items
-from mysecret import add_name, build_secret_items, edit_item, file_problems, read_secrets
+from mysecret import add_name, set_notes, build_secret_items, edit_item, file_problems, read_secrets
 from mynotify import resolve as resolve_notifier, send as send_notification
 from myhelp import TOPICS, help_end, help_search
 from myhistory import History
@@ -344,7 +344,7 @@ def _search(config: Config, query: str, limit: int | None = None, runner=default
         items = build_secret_items(config, runner)
         if not rest.strip():
             return [Match(i, 100) for i in items[: config.max_browse_results]]
-        found = rank([i for i in items if (i.kind == "secret" and i.id != "secret:*all*") or i.id.startswith("secret-problem:")], rest, config.max_browse_results, **{**options, "fuzzy": False})
+        found = rank([i for i in items if i.kind == "secret" or i.id.startswith("secret-problem:")], rest, config.max_browse_results, **{**options, "fuzzy": False})
         return found  # nothing found: an empty list (a value is never searched)
 
     if mode in ("edit", "execute"):  # the lists of edit.json / execute.json, filtered by what follows the word
@@ -491,6 +491,21 @@ def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.s
         copy_log=config.expander_copy_log,
         notify_method=config.notify_method,
         clear_seconds=config.secret_clear_seconds,
+        secret_notify_value=config.secret_notify_value,
+        weather_location=config.weather_location,
+        weather_format=config.weather_format,
+        weather_timeout=config.weather_timeout,
+        aerospace=config.aerospace_enabled,
+        aerospace_command=config.aerospace_command,
+        aerospace_config=config.aerospace_config,
+        aerospace_workspaces=config.aerospace_workspaces,
+        power_force=config.power_force,
+        power_grace=config.power_grace,
+        power_protected=config.kill_protected,
+        power_lock=config.power_lock,
+        screenshot_dir=config.screenshot_dir,
+        screenshot_clipboard=config.screenshot_clipboard,
+        screenshot_delay=config.screenshot_delay,
         browser_command=config.browser_command,
         editor_command=config.edit_editor,
         shell=config.execute_shell,
@@ -540,14 +555,65 @@ def cmd_help(args, config: Config, runner=default_runner, **_) -> int:
 NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
 
-def cmd_secret_set(args, config: Config, **_) -> int:
-    """ml secret-set NAME: save a value in the macOS Keychain (the program `security` asks for it, hidden) and list the name."""
+def read_with_stars(prompt: str) -> str:
+    """Read one line from the terminal showing * for every character typed (Backspace works). Falls back to input()."""
+    try:
+        import termios
+        import tty
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+    except Exception:  # noqa: BLE001 - not a terminal (a pipe, Windows...): plain input
+        return input(prompt)
+    chars: list = []
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    try:
+        tty.setcbreak(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch in ("\n", "\r", ""):
+                break
+            if ch == "\x03":
+                raise KeyboardInterrupt
+            if ch in ("\x7f", "\b"):
+                if chars:
+                    chars.pop()
+                    sys.stdout.write("\b \b")
+            else:
+                chars.append(ch)
+                sys.stdout.write("*")
+            sys.stdout.flush()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        sys.stdout.write("\n")
+    return "".join(chars)
+
+
+def cmd_secret_set(args, config: Config, ask=input, **_) -> int:
+    """ml secret-set NAME [VALUE] [--notes TEXT]: save a value in the macOS Keychain and list the name.
+
+    Without VALUE it is asked for, shown as `secret.input_echo` says: hidden, asterisks or visible.
+    """
     name = args.name.strip()
     if not NAME_RE.match(name):
         print(f"error: {name!r} is not a good name (letters, digits, _ . -)", file=sys.stderr)
         return 2
+    value = args.value
+    mode = config.secret_input_echo
+    if value is None and mode != "hidden":
+        try:
+            value = (read_with_stars if mode == "asterisks" else ask)(f"Value for {name}: ")
+        except (EOFError, KeyboardInterrupt):
+            print("\ncancelled", file=sys.stderr)
+            return 1
+        if not value:
+            print("error: an empty value was not saved", file=sys.stderr)
+            return 1
     command = ["security", "add-generic-password", "-U", "-s", config.secret_service, "-a", name, "-w"]  # -w last: it asks, hidden
-    print(f"Saving {name} in the Keychain (service {config.secret_service}). Type or paste the value when asked (it is hidden).")
+    if value is None:
+        print(f"Saving {name} in the Keychain (service {config.secret_service}). Type or paste the value when asked (it is hidden).")
+    else:
+        command.append(value)
     try:
         code = subprocess.run(command, check=False).returncode
     except FileNotFoundError:
@@ -557,7 +623,68 @@ def cmd_secret_set(args, config: Config, **_) -> int:
         print(f"error: the Keychain did not save it (exit code {code})", file=sys.stderr)
         return 1
     added = add_name(config.secret_file, name)
-    print("Saved." + (f" Added {name}=keychain to {config.secret_file}." if added else ""))
+    if args.notes is not None:
+        set_notes(config.secret_file, name, args.notes.replace("\\n", "\n"))
+    print("Saved." + (f" Added {name}=keychain to {config.secret_file}." if added else "") + (" private_notes saved." if args.notes else ""))
+    return 0
+
+
+def cmd_secret_notes(args, config: Config, **_) -> int:
+    """ml secret-notes NAME [TEXT]: the private_notes of an entry. Without TEXT, read lines from the terminal until Ctrl-D (empty = remove)."""
+    name = args.name.strip()
+    if not NAME_RE.match(name):
+        print(f"error: {name!r} is not a good name (letters, digits, _ . -)", file=sys.stderr)
+        return 2
+    if args.text is not None:
+        notes = args.text.replace("\\n", "\n")
+    else:
+        if sys.stdin.isatty():
+            print(f"private_notes of {name}: type as many lines as you want, finish with Ctrl-D on an empty line (nothing = remove the notes).")
+        notes = sys.stdin.read()
+    add_name(config.secret_file, name)
+    set_notes(config.secret_file, name, notes)
+    print(f"private_notes of {name}: " + ("saved" if notes.strip() else "removed"))
+    return 0
+
+
+def summarize_crash(text: str, limit: int = 25) -> str:
+    """A macOS crash report (.ips = two JSON documents, or an old .crash text) -> the few lines that matter."""
+    try:
+        head, _, body = text.partition("\n")
+        data = json.loads(body)
+        exc, term = data.get("exception", {}), data.get("termination", {})
+        lines = [f"app: {data.get('procName', '?')}  macOS: {data.get('osVersion', {}).get('train', '?')}",
+                 f"exception: {exc.get('type', '?')} {exc.get('signal', '')} {exc.get('subtype', '')}".rstrip(),
+                 f"termination: {term.get('indicator', term.get('reason', ''))}"]
+        if data.get("asi"):
+            lines.append(f"asi: {json.dumps(data['asi'])[:300]}")
+        threads = data.get("threads", [])
+        crashed = next((t for t in threads if t.get("triggered")), threads[data.get("faultingThread", 0)] if threads else {})
+        images = data.get("usedImages", [])
+        lines.append(f"crashed thread: {crashed.get('name') or crashed.get('queue') or crashed.get('id', '?')}")
+        for frame in crashed.get("frames", [])[:limit]:
+            image = images[frame["imageIndex"]].get("name", "?") if "imageIndex" in frame and frame["imageIndex"] < len(images) else "?"
+            lines.append(f"  {image:<28} {frame.get('symbol', '?')}")
+        return "\n".join(lines)
+    except (ValueError, KeyError, TypeError, IndexError):
+        return "\n".join(text.splitlines()[:60])
+
+
+def cmd_crash(args, config: Config, **_) -> int:
+    """ml crash: the newest "Python quit unexpectedly" report of macOS, summarised, plus the end of the app log."""
+    folder = Path("~/Library/Logs/DiagnosticReports").expanduser()
+    reports = sorted([*folder.glob("Python*.ips"), *folder.glob("Python*.crash"), *folder.glob("python*.ips")], key=lambda p: p.stat().st_mtime, reverse=True)
+    if not reports:
+        print(f"No Python crash report in {folder}. (Open Console.app > Crash Reports to look for it yourself.)")
+    else:
+        newest = reports[0]
+        print(f"{newest}\n")
+        print(summarize_crash(newest.read_text(encoding="utf-8", errors="replace")))
+        print(f"\n({len(reports)} report(s) in total; paste the text above in the chat)")
+    log = config.autostart_log_dir / "mylauncher.log"
+    if log.exists():
+        tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]
+        print(f"\n--- end of {log} ---\n" + "\n".join(tail))
     return 0
 
 
@@ -697,6 +824,14 @@ def cmd_doctor(args, config: Config | None = None, config_error: str = "", **_) 
         apps = find_apps(config.app_folders, config.app_exclude)
         results.append(("✔" if apps else "!", f"{len(apps)} application(s) found"))
         results.append(("✔", f"{len(config.commands)} command(s): " + ", ".join(c.id for c in config.commands)))
+        if config.aerospace_enabled:
+            import myaerospace
+            program = myaerospace.find_command(config.aerospace_command)
+            rules, problem = myaerospace.read_rules(config.aerospace_config)
+            results.append(("✔" if program else "!", f"aerospace: {program or config.aerospace_command + ' not found (aerospace.enabled is true, but the program is not here)'}"))
+            results.append(("!" if problem else "✔", f"aerospace workspaces: {len(rules)} rule(s) with move-node-to-workspace in {config.aerospace_config}, {len(config.aerospace_workspaces)} of your own" + (f" ({problem})" if problem else "")))
+        else:
+            results.append(("✔", "aerospace: off (aerospace.enabled is false): apps open without switching workspace"))
         exists = config.quicklinks_path.is_file()
         results.append(
             ("✔" if exists else "!", f"quicklinks: {len(config.quicklinks)} in {config.quicklinks_path}" + ("" if exists else " (file not found: no quicklinks)"))
@@ -814,8 +949,16 @@ def make_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("config", parents=[common], help="where the settings are and what they say").set_defaults(func=cmd_config)
     secret_set = sub.add_parser("secret-set", parents=[common], help="save a secret in the macOS Keychain and list it in the secret file")
-    secret_set.add_argument("name", help="e.g. OPENROUTER_API_KEY")
+    secret_set.add_argument("name", help="e.g. google")
+    secret_set.add_argument("value", nargs="?", default=None, help="the value (optional: without it you are asked; with it, it stays in your shell history)")
+    secret_set.add_argument("--notes", default=None, help="private_notes for the entry (\\n = new line)")
     secret_set.set_defaults(func=cmd_secret_set)
+    crash = sub.add_parser("crash", parents=[common], help="summarise the newest \"Python quit unexpectedly\" report")
+    crash.set_defaults(func=cmd_crash)
+    secret_notes = sub.add_parser("secret-notes", parents=[common], help="write the private_notes (many lines) of a secret")
+    secret_notes.add_argument("name")
+    secret_notes.add_argument("text", nargs="?", default=None, help="the notes (\\n = new line); without it, lines are read until Ctrl-D")
+    secret_notes.set_defaults(func=cmd_secret_notes)
     espanso = sub.add_parser("espanso-config", parents=[common], help="keep Espanso from expanding triggers typed into the launcher")
     espanso.add_argument("--install", action="store_true", help="write the file into Espanso's config folder")
     espanso.set_defaults(func=cmd_espanso_config)

@@ -129,7 +129,63 @@
       ],
       "confirm": true,
       "icon": "🔌",
-      "description": "Turn the Mac off (asks first)"
+      "description": "Shut down the Mac (asks first). Applications that refuse to quit are force quit after power.grace_seconds"
+    },
+    {
+      "id": "reboot",
+      "title": "Reboot",
+      "action": "reboot",
+      "keywords": [
+        "restart",
+        "reboot the mac",
+        "restart the mac"
+      ],
+      "confirm": true,
+      "icon": "🔄",
+      "description": "Restart the Mac (asks first). Applications that refuse to quit are force quit after power.grace_seconds"
+    },
+    {
+      "id": "screenshot_full_screen",
+      "title": "screenshot full_screen",
+      "action": "screenshot_full",
+      "keywords": [
+        "screenshot",
+        "screen capture",
+        "whole screen",
+        "full screen"
+      ],
+      "confirm": false,
+      "icon": "🖥️",
+      "description": "The whole screen, saved as a file  ·  macOS shortcut ⇧⌘3"
+    },
+    {
+      "id": "screenshot_region",
+      "title": "screenshot region",
+      "action": "screenshot_region",
+      "keywords": [
+        "screenshot",
+        "screen capture",
+        "area",
+        "selection",
+        "crop"
+      ],
+      "confirm": false,
+      "icon": "✂️",
+      "description": "Drag to choose an area  ·  macOS shortcut ⇧⌘4  (help screenshot)"
+    },
+    {
+      "id": "weather",
+      "title": "weather",
+      "action": "weather",
+      "keywords": [
+        "weather",
+        "temperature",
+        "forecast",
+        "wttr"
+      ],
+      "confirm": false,
+      "icon": "🌤️",
+      "description": "Weather now, in a notification  ·  the same as: curl -s \"wttr.in/?format=%c+%t\""
     }
   ],
   "notifications": {
@@ -143,6 +199,27 @@
     "file": "~/.config/mylauncher/secrets.env",
     "clear_seconds": 30,
     "reveal_chars": 4,
+    "input_echo": "visible",
+    "notify_value": true,
     "keychain_service": "justtothepoint-toolkit"
+  },
+  "aerospace": {
+    "enabled": true,
+    "command": "aerospace",
+    "workspaces": {}
+  },
+  "screenshot": {
+    "directory": "auto",
+    "clipboard": false,
+    "delay_seconds": 1
+  },
+  "weather": {
+    "location": "",
+    "format": "%c+%t",
+    "timeout_seconds": 6
+  },
+  "power": {
+    "force": true,
+    "grace_seconds": 8
   }
 }

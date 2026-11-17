@@ -164,7 +164,7 @@ class SecretList(SecretCase):
     def test_secret_lists_all_first_then_the_entries_with_values_hidden(self):
         data = self.search("secret")
         self.assertEqual((data["mode"], data["highlight"]), ("secret", 6))
-        self.assertEqual([r["title"] for r in data["results"]], ["all", "OPENROUTER_API_KEY", "TOKEN", "SHORT", "NOTE", "PLAIN"])
+        self.assertEqual([r["title"] for r in data["results"]], ["all", "private_vault", "OPENROUTER_API_KEY", "TOKEN", "SHORT", "NOTE", "PLAIN"])
         rows = {r["title"]: r for r in data["results"]}
         row = rows["OPENROUTER_API_KEY"]
         self.assertEqual((row["icon"], row["badge"], row["kind"], row["action"]), ("🔑", "Secret", "secret", "copy_secret"))

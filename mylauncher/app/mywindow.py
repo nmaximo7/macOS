@@ -36,13 +36,14 @@ from mywidgets import CommandInput, DetailView, ResultList
 
 
 def press_command_v() -> None:
-    """Type Command+V into whatever application is in front (pynput is already needed for the hotkey)."""
-    from pynput.keyboard import Controller, Key
+    """Type Command+V into whatever application is in front, with Quartz (no pynput: it can crash Python)."""
+    import Quartz
 
-    keyboard = Controller()
-    with keyboard.pressed(Key.cmd):
-        keyboard.press("v")
-        keyboard.release("v")
+    V = 9  # the key code of the "v" key
+    for down in (True, False):
+        event = Quartz.CGEventCreateKeyboardEvent(None, V, down)
+        Quartz.CGEventSetFlags(event, Quartz.kCGEventFlagMaskCommand)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
 
 def bring_to_front(runner=subprocess.run, pid: int | None = None) -> None:
@@ -227,7 +228,8 @@ class LauncherWindow:
         item = self.detail_item if self.detail_item is not None else self.state.current
         if item is None:
             return "break"
-        if item["kind"] in ("help", "secret") and self.detail_item is None and item.get("detail"):
+        one_enter = item["kind"] == "secret" and item["id"] not in ("secret:*all*", "secret:*vault*")  # a named secret: ONE Enter copies it
+        if item["kind"] in ("help", "secret") and self.detail_item is None and item.get("detail") and not one_enter:
             self._open_detail(item)  # first Enter: read it; the next Enter copies it (below)
             return "break"
         if item["kind"] == "prefix":  # a hint ("yt", "kill", ";p"): there is nothing to run yet, so write it and wait
