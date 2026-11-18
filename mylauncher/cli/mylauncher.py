@@ -42,10 +42,11 @@ import re
 import shutil
 import subprocess
 import sys
+import shlex
 import time
 from pathlib import Path
 
-from myactions import RunOptions, default_runner, default_spawn, run_item
+from myactions import ACTIONS, RunOptions, default_runner, default_spawn, run_item
 from myapps import find_apps
 from myconfig import Config, ConfigError, find_config_path, load_config
 import myespanso
@@ -54,6 +55,9 @@ from myedit import build_edit_items
 from myexecute import build_execute_items
 from mysecret import add_name, set_notes, build_secret_items, edit_item, file_problems, read_secrets
 from mynotify import resolve as resolve_notifier, send as send_notification
+import myversion
+import mytimer
+import myassistant
 from myhelp import TOPICS, help_end, help_search
 from myhistory import History
 from mykill import running_apps
@@ -61,7 +65,7 @@ from myquicklinks import build_url
 from mysearch import complete, rank, split_prefix
 from mytypes import Item, Match
 
-VERSION = "0.9.0"
+VERSION = myversion.VERSION
 
 SCORE_MODE = 200  # a quicklink you have already started typing a query for beats everything else
 
@@ -163,6 +167,14 @@ def build_items(config: Config) -> list:
             icon="▶️",
         )
     )
+    for word, title, subtitle, icon in (
+        ("about", "About mylauncher (about)", "Version, Python, configuration, hotkey: what is running now", "ℹ️"),
+        ("timer", "Timer (timer <time>)", "timer 90, timer 5m, timer 1h30m: notification and sound at the end", "⏱️"),
+        ("explain", "Explain a concept (explain <topic>)", "Local model, beginner explanation; the prompt is in prompts.json", "🧠"),
+        ("deep_study", "Deep study (deep_study <topic>)", "Intuition, analogies, examples, why it works", "🔬"),
+        ("describe_image", "Describe an image (describe_image <file>)", "Detailed description of a picture; no file = the newest screenshot", "🖼️"),
+    ):
+        items.append(Item(id=f"prefix:{word}", title=title, kind="prefix", action="prefix_hint", keywords=(word, word.replace("_", " ")), complete=f"{word} ", subtitle=subtitle, icon=icon))
     items.append(
         Item(
             id=f"prefix:{config.run_word}",
@@ -257,6 +269,50 @@ def snippet_problem(config: Config) -> Item | None:
     return Item(id="info:snippets", title=title, kind="prefix", action="prefix_hint", complete=";", subtitle=hint, icon="⚠️", badge="Fix")
 
 
+TOOL_WORDS = ("about", "timer", "explain", "deep_study", "deep-study", "describe_image", "describe-image")
+
+
+def _ml_command(*words) -> str:
+    """The shell line that runs `ml <words>` (what the terminal window executes)."""
+    return shlex.join(["/bin/bash", str(Path(__file__).resolve().parent / "ml"), *words])  # bash runs it: no need for the executable bit
+
+
+def tool_items(config: Config, word: str, rest: str) -> list:
+    """The one row of a tool word typed with a space: timer, explain, deep_study, describe_image."""
+    word = word.replace("-", "_")
+    if word == "timer":
+        seconds = mytimer.parse_duration(rest) if rest.strip() else None
+        if seconds is None:
+            sub = "type the time: 90, 90s, 5m, 1h30m, 1:30" + (f"   ({rest!r} is not a time)" if rest.strip() else "")
+            return [Item(id="info:timer", title="Timer: how long?", kind="prefix", action="prefix_hint", complete="timer ", subtitle=sub, icon="⏱️", badge="Timer")]
+        ends = time.strftime("%H:%M:%S", time.localtime(time.time() + seconds))
+        return [Item(id=f"timer:{seconds}", title=f"Timer: {mytimer.format_duration(seconds)}", kind="timer", action="timer", target=str(seconds),
+                     complete=f"timer {rest.strip()}", subtitle=f"rings at {ends}: notification and sound", icon="⏱️", badge="Timer")]
+    kind = {"explain": "explain", "deep_study": "deep_study", "describe_image": "describe_image"}.get(word)
+    if kind is None:
+        return []
+    icon = {"explain": "🧠", "deep_study": "🔬", "describe_image": "🖼️"}[kind]
+    what = {"explain": "Explain", "deep_study": "Deep study", "describe_image": "Describe image"}[kind]
+    if kind == "describe_image":
+        image = rest.strip().strip("'\"")
+        if not image:  # nothing typed: the newest screenshot
+            found = myassistant.latest_image(Path(config.screenshot_dir).expanduser() if config.screenshot_dir != "auto" else Path("~/Desktop").expanduser())
+            if found is None:
+                return [Item(id="info:describe_image", title="Describe image: which file?", kind="prefix", action="prefix_hint", complete="describe_image ",
+                             subtitle="type the path of a png/jpg (no path = the newest screenshot)", icon=icon, badge=what)]
+            image = str(found)
+            subtitle = f"the newest screenshot: {found.name}  ·  model {config.ollama_vision_model or config.ollama_model}"
+        else:
+            subtitle = f"{image}  ·  model {config.ollama_vision_model or config.ollama_model}"
+        return [Item(id="ai:describe_image", title=f"Describe image: {Path(image).name}", kind="ai", action="execute_terminal",
+                     target=_ml_command("describe-image", "--", image), complete=f"describe_image {rest}".rstrip(), subtitle=subtitle, icon=icon, badge=what)]
+    if not rest.strip():
+        return [Item(id=f"info:{kind}", title=f"{what}: which concept?", kind="prefix", action="prefix_hint", complete=f"{kind} ",
+                     subtitle="type the concept: photosynthesis, quantum entanglement ...", icon=icon, badge=what)]
+    return [Item(id=f"ai:{kind}", title=f"{what}: {rest.strip()}", kind="ai", action="execute_terminal", target=_ml_command(kind.replace("_", "-"), "--", rest.strip()),
+                 complete=f"{kind} {rest.strip()}", subtitle=f"opens a terminal and asks {config.ollama_model} (prompt: prompts.json)", icon=icon, badge=what)]
+
+
 def detect_mode(config: Config, query: str) -> tuple:
     """(mode, n): what the launcher understood and how many characters at the start of the query
     make up the recognised command (the window paints them in colour).
@@ -267,6 +323,8 @@ def detect_mode(config: Config, query: str) -> tuple:
     lead = len(query) - len(text)
     parts = split_prefix(query)
     word = parts[0] if parts else text.strip().lower()
+    if word in TOOL_WORDS and parts:
+        return "tool", lead + len(word)
     if word == config.run_word:
         return "run", lead + len(word)
     if word == config.kill_word:
@@ -326,6 +384,11 @@ def _search(config: Config, query: str, limit: int | None = None, runner=default
                     subtitle=target if (target := build_url(link, rest)) else "",
                 )
                 return [Match(item, SCORE_MODE)]
+
+    if parts and word == "about":
+        return help_search(config, f"{config.help_word} about {rest}".rstrip(), runner, **options)
+    if parts and word in TOOL_WORDS:
+        return [Match(i, SCORE_MODE) for i in tool_items(config, word, rest)]
 
     mode, _ = detect_mode(config, query)
 
@@ -492,6 +555,8 @@ def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.s
         notify_method=config.notify_method,
         clear_seconds=config.secret_clear_seconds,
         secret_notify_value=config.secret_notify_value,
+        timer_sound=config.timer_sound,
+        timer_repeat=config.timer_repeat,
         weather_location=config.weather_location,
         weather_format=config.weather_format,
         weather_timeout=config.weather_timeout,
@@ -668,6 +733,78 @@ def summarize_crash(text: str, limit: int = 25) -> str:
         return "\n".join(lines)
     except (ValueError, KeyError, TypeError, IndexError):
         return "\n".join(text.splitlines()[:60])
+
+
+def cmd_about(args, config: Config, runner=default_runner, **_) -> int:
+    """ml about: which mylauncher is this (version, files, Python, configuration, hotkey...)."""
+    from myhelp import load_rows
+
+    rows, _problem = load_rows(config, "about", runner)
+    if args.json:
+        _print_json([{"name": r.title, "value": r.subtitle} for r in rows[1:]])
+    else:
+        print(f"mylauncher {myversion.one_line()}\n\n{rows[0].detail}")
+    return 0
+
+
+def cmd_timer(args, config: Config, runner=default_runner, spawn=default_spawn, **_) -> int:
+    """ml timer 90 | 5m | 1h30m | 1:30: start a timer; a notification and a sound when it ends."""
+    text = " ".join(args.time)
+    seconds = mytimer.parse_duration(text)
+    if seconds is None:
+        print(f"error: {text!r} is not a time. Try: 90, 90s, 5m, 1h30m, 1:30 (at most 24 h)", file=sys.stderr)
+        return 2
+    item = Item(id=f"timer:{seconds}", title="Timer", kind="timer", action="timer", target=str(seconds))
+    options = RunOptions(notify_method=config.notify_method, timer_sound=config.timer_sound, timer_repeat=config.timer_repeat, shell=config.execute_shell,
+                         log_dir=config.execute_log_dir, spawn=spawn)
+    result = ACTIONS["timer"](item, runner, args.dry_run, options)
+    print(result.message)
+    return 0 if result.ok else 1
+
+
+def _cmd_ai(kind: str, text: str, config: Config, spawn, sleep, opener, **_) -> int:
+    return myassistant.ask(config, kind, text, opener=opener or myassistant.urllib.request.urlopen, spawn=spawn, sleep=sleep)
+
+
+def cmd_explain(args, config: Config, spawn=default_spawn, sleep=time.sleep, opener=None, **_) -> int:
+    """ml explain TOPIC: a beginner explanation from the local model (prompt: conf/prompts.json)."""
+    return _cmd_ai("explain", " ".join(args.topic), config, spawn, sleep, opener)
+
+
+def cmd_deep_study(args, config: Config, spawn=default_spawn, sleep=time.sleep, opener=None, **_) -> int:
+    """ml deep-study TOPIC: intuition, analogies, examples, why it works."""
+    return _cmd_ai("deep_study", " ".join(args.topic), config, spawn, sleep, opener)
+
+
+def cmd_describe_image(args, config: Config, spawn=default_spawn, sleep=time.sleep, opener=None, **_) -> int:
+    """ml describe-image [FILE]: describe a picture in detail (no FILE: the newest screenshot)."""
+    path = " ".join(args.file)
+    if not path.strip():
+        folder = Path("~/Desktop").expanduser() if config.screenshot_dir == "auto" else Path(config.screenshot_dir).expanduser()
+        found = myassistant.latest_image(folder)
+        if found is None:
+            print(f"error: no image given and none found in {folder}", file=sys.stderr)
+            return 1
+        path = str(found)
+    return _cmd_ai("describe_image", path, config, spawn, sleep, opener)
+
+
+def cmd_find_image(args, config: Config, spawn=default_spawn, sleep=time.sleep, opener=None, **_) -> int:
+    """ml find-image FOLDER TOPIC: the images below FOLDER that are about TOPIC, one path per line."""
+    topic = " ".join(args.topic)
+    try:
+        found = myassistant.find_images(config, args.folder, topic, names_only=args.names_only, refresh=args.refresh, limit=args.limit,
+                                        opener=opener or myassistant.urllib.request.urlopen, spawn=spawn, sleep=sleep)
+    except (myassistant.AssistantError, ConfigError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        _print_json([str(p) for p in found])
+    else:
+        for path in found:
+            print(path)
+        print(f"{len(found)} image(s) about {topic!r}", file=sys.stderr)
+    return 0 if found else 1
 
 
 def cmd_crash(args, config: Config, **_) -> int:
@@ -919,7 +1056,7 @@ def make_parser() -> argparse.ArgumentParser:
     common.add_argument("--json", action="store_true", help="write the answer as JSON")
 
     parser = argparse.ArgumentParser(prog="mylauncher", description="A small, readable launcher (command line engine).")
-    parser.add_argument("--version", action="version", version=f"mylauncher {VERSION}")
+    parser.add_argument("--version", action="version", version=f"mylauncher {myversion.one_line()}")
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     sub.add_parser("list", parents=[common], help="every item the launcher knows").set_defaults(func=cmd_list)
@@ -953,6 +1090,26 @@ def make_parser() -> argparse.ArgumentParser:
     secret_set.add_argument("value", nargs="?", default=None, help="the value (optional: without it you are asked; with it, it stays in your shell history)")
     secret_set.add_argument("--notes", default=None, help="private_notes for the entry (\\n = new line)")
     secret_set.set_defaults(func=cmd_secret_set)
+    about = sub.add_parser("about", parents=[common], help="which mylauncher is this: version, files, Python, settings")
+    about.set_defaults(func=cmd_about)
+    timer_p = sub.add_parser("timer", parents=[common], help="a timer: notification and sound at the end (90, 5m, 1h30m, 1:30)")
+    timer_p.add_argument("time", nargs="+", help="for example 90, 5m, 1h30m, 1:30")
+    timer_p.add_argument("--dry-run", action="store_true", help="show what would happen")
+    timer_p.set_defaults(func=cmd_timer)
+    for name, function, text in (("explain", cmd_explain, "explain a concept to a beginner (local model)"), ("deep-study", cmd_deep_study, "deep, intuitive understanding of a concept")):
+        ai = sub.add_parser(name, parents=[common], help=text)
+        ai.add_argument("topic", nargs="+", help="the concept, for example: quantum entanglement")
+        ai.set_defaults(func=function)
+    describe = sub.add_parser("describe-image", parents=[common], help="describe an image in detail (no file: the newest screenshot)")
+    describe.add_argument("file", nargs="*", help="a png/jpg file")
+    describe.set_defaults(func=cmd_describe_image)
+    find = sub.add_parser("find-image", aliases=["find_image"], parents=[common], help="the images below a folder that are about a topic")
+    find.add_argument("folder", help="the folder to search (recursively)")
+    find.add_argument("topic", nargs="+", help="for example: religious")
+    find.add_argument("--names-only", action="store_true", help="no model: only match the words of the topic against the file and folder names")
+    find.add_argument("--refresh", action="store_true", help="forget what the model saw before and look at every picture again")
+    find.add_argument("--limit", type=int, default=0, metavar="N", help="look at no more than N new pictures in this run (the next run continues)")
+    find.set_defaults(func=cmd_find_image)
     crash = sub.add_parser("crash", parents=[common], help="summarise the newest \"Python quit unexpectedly\" report")
     crash.set_defaults(func=cmd_crash)
     secret_notes = sub.add_parser("secret-notes", parents=[common], help="write the private_notes (many lines) of a secret")
@@ -973,7 +1130,7 @@ def make_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv=None, runner=default_runner, ask=input, sleep=time.sleep, spawn=default_spawn) -> int:
+def main(argv=None, runner=default_runner, ask=input, sleep=time.sleep, spawn=default_spawn, opener=None) -> int:
     """Entry point. `runner`, `ask` and `sleep` can be replaced in tests (no real command, nobody asked, no waiting)."""
     args = make_parser().parse_args(argv)
     config, config_error = None, ""
@@ -983,7 +1140,7 @@ def main(argv=None, runner=default_runner, ask=input, sleep=time.sleep, spawn=de
         config_error = str(exc)
     if config is None and args.command not in ("doctor", "report"):  # doctor and report report the problem itself
         return _fail(args, config_error, code=2)
-    return args.func(args, config=config, config_error=config_error, runner=runner, ask=ask, sleep=sleep, spawn=spawn)
+    return args.func(args, config=config, config_error=config_error, runner=runner, ask=ask, sleep=sleep, spawn=spawn, opener=opener)
 
 
 if __name__ == "__main__":

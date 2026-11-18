@@ -142,6 +142,18 @@ class Config:
     screenshot_dir: str = "auto"
     screenshot_clipboard: bool = False
     screenshot_delay: int = 1
+    ollama_command: str = "ollama"
+    ollama_host: str = "http://127.0.0.1:11434"
+    ollama_model: str = "qwen3.8:27b"
+    ollama_vision_model: str = ""  # describe_image: "" = the same model
+    ollama_cache: str = "~/Library/Caches/mylauncher/image-captions.json"  # find_image: what the model saw in each picture
+    ollama_think: object = None  # True / False / None (None = do not send the option)
+    ollama_keep_alive: str = ""  # e.g. "10m": how long the model stays in memory
+    ollama_timeout: int = 600
+    ollama_autostart: bool = True
+    ollama_prompts: Path = Path("prompts.json")  # relative paths: next to myconfiguration.json
+    timer_sound: str = "/System/Library/Sounds/Glass.aiff"
+    timer_repeat: int = 3
     weather_location: str = ""
     weather_format: str = "%c+%t"
     weather_timeout: int = 6
@@ -299,6 +311,29 @@ def parse_config(data, path: Path) -> Config:
         raise ConfigError("power.grace_seconds must be between 0 and 60")
     lock_text = _check(power.get("lock_file", "~/Library/Application Support/mylauncher/power.lock"), str, "power.lock_file")
     power_lock = Path(lock_text).expanduser() if lock_text.strip() else None
+    ollama_section = _check(data.get("ollama", {}), dict, "ollama")
+    ollama_model = _check(ollama_section.get("model", "qwen3.8:27b"), str, "ollama.model").strip()
+    if not ollama_model:
+        raise ConfigError('ollama.model must be a model name, for example "qwen3.8:27b"')
+    ollama_vision = _check(ollama_section.get("vision_model", ""), str, "ollama.vision_model").strip()
+    ollama_host = _check(ollama_section.get("host", "http://127.0.0.1:11434"), str, "ollama.host").strip()
+    if not ollama_host.startswith(("http://", "https://")):
+        raise ConfigError('ollama.host must start with http://, for example "http://127.0.0.1:11434"')
+    ollama_think = ollama_section.get("think", False)
+    if ollama_think is not None and not isinstance(ollama_think, bool):
+        raise ConfigError("ollama.think must be true, false or null")
+    ollama_timeout = _check(ollama_section.get("timeout_seconds", 600), int, "ollama.timeout_seconds")
+    if ollama_timeout < 5:
+        raise ConfigError("ollama.timeout_seconds must be at least 5")
+    ollama_prompts = Path(_check(ollama_section.get("prompts_file", "prompts.json"), str, "ollama.prompts_file")).expanduser()
+    if not ollama_prompts.is_absolute():
+        ollama_prompts = Path(path).parent / ollama_prompts
+    ollama_cache = _check(ollama_section.get("cache_file", "~/Library/Caches/mylauncher/image-captions.json"), str, "ollama.cache_file").strip()
+    timer_section = _check(data.get("timer", {}), dict, "timer")
+    timer_sound = _check(timer_section.get("sound", "/System/Library/Sounds/Glass.aiff"), str, "timer.sound").strip()
+    timer_repeat = _check(timer_section.get("repeat", 3), int, "timer.repeat")
+    if not 0 <= timer_repeat <= 20:
+        raise ConfigError("timer.repeat must be between 0 and 20")
     weather_section = _check(data.get("weather", {}), dict, "weather")
     weather_location = _check(weather_section.get("location", ""), str, "weather.location").strip()
     weather_format = _check(weather_section.get("format", "%c+%t"), str, "weather.format").strip() or "%c+%t"
@@ -531,6 +566,18 @@ def parse_config(data, path: Path) -> Config:
         screenshot_dir=shot_dir,
         screenshot_clipboard=shot_clip,
         screenshot_delay=shot_delay,
+        ollama_command=_check(ollama_section.get("command", "ollama"), str, "ollama.command").strip() or "ollama",
+        ollama_host=ollama_host,
+        ollama_model=ollama_model,
+        ollama_vision_model=ollama_vision,
+        ollama_think=ollama_think,
+        ollama_cache=ollama_cache,
+        ollama_keep_alive=_check(ollama_section.get("keep_alive", ""), str, "ollama.keep_alive").strip(),
+        ollama_timeout=ollama_timeout,
+        ollama_autostart=_check(ollama_section.get("autostart", True), bool, "ollama.autostart"),
+        ollama_prompts=ollama_prompts,
+        timer_sound=timer_sound,
+        timer_repeat=timer_repeat,
         weather_location=weather_location,
         weather_format=weather_format,
         weather_timeout=weather_timeout,

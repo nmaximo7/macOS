@@ -17,7 +17,7 @@ class CliCase(support.TempDirCase):
         self.runner = support.FakeRunner()
         self.spawned = []  # (command, log file) of every program started "in the background"
 
-    def call(self, *args, answers=(), runner=None):
+    def call(self, *args, answers=(), runner=None, opener=None):
         """Run the CLI; return (exit code, stdout, stderr)."""
         answers = iter(answers)
 
@@ -30,7 +30,7 @@ class CliCase(support.TempDirCase):
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
             code = M.main([*args, "--config", self.config], runner=runner or self.runner, ask=ask, sleep=lambda seconds: None,
-                         spawn=lambda command, log: self.spawned.append((command, str(log))))
+                         spawn=lambda command, log: self.spawned.append((command, str(log))), opener=opener)
         return code, out.getvalue(), err.getvalue()
 
 
@@ -41,12 +41,12 @@ class Listing(CliCase):
         self.assertEqual(code, 0)
         self.assertEqual(ids[0], "cmd:shutdown")
         self.assertIn("app:Obsidian", ids)
-        self.assertEqual(len(ids), 12)  # shutdown, kill, secret, keep_secret, help, edit, execute and run entries, 4 apps
+        self.assertEqual(len(ids), 17)  # shutdown, 11 command words (kill ... run, about, timer, explain, deep_study, describe_image), 4 apps
 
     def test_list_text(self):
         code, out, _ = self.call("list")
         self.assertIn("Run Obsidian", out)
-        self.assertIn("12 item(s)", out)
+        self.assertIn("17 item(s)", out)
 
 
 class Searching(CliCase):

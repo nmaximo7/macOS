@@ -23,5 +23,10 @@
     "description": "skills, OpenClaw skills (SKILL.md)",
     "emoji": "🧠",
     "path": "~/macOS/claude/skills/**/SKILL.md"
+  },
+  {
+    "description": "prompts, the prompts of explain, deep_study and describe_image",
+    "emoji": "💬",
+    "path": "~/macOS/mylauncher/conf/prompts.json"
   }
 ]

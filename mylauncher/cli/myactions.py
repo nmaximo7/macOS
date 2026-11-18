@@ -36,6 +36,7 @@ import hashlib
 import mynotify
 import myaerospace
 import mypower
+import mytimer
 from mysecret import ensure_file
 from mykill import alive, applescript_quote, running_apps
 from mytypes import Item
@@ -80,6 +81,8 @@ class RunOptions:
     power_protected: tuple = ("python",)  # applications never touched: the launcher itself
     power_lock: object = None  # a marker file that stops a second request within 2 minutes (None = no guard)
     secret_notify_value: bool = True  # copy_secret: the notification shows the value
+    timer_sound: str = "/System/Library/Sounds/Glass.aiff"  # timer
+    timer_repeat: int = 3  # timer: how many times the sound plays
     weather_location: str = ""  # weather: "" = wttr.in guesses it from your address; or "Paris", "Madrid"...
     weather_format: str = "%c+%t"  # weather: wttr.in format (%c icon, %t temperature, %h humidity, %w wind...)
     weather_timeout: int = 6  # weather: seconds before giving up
@@ -287,6 +290,22 @@ def weather(item: Item, runner=default_runner, dry_run: bool = False, options=No
         if not ok:
             text += f"  (notification failed: {detail})"
     return ActionResult(True, text, command)
+
+
+def timer(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """Start a timer in the background (item.target = seconds): when it ends, a notification and a sound."""
+    options = options or RunOptions()
+    seconds = int(item.target)
+    script = mytimer.timer_script(seconds, options.notify_method, options.timer_sound, options.timer_repeat)
+    command = [*options.shell, script]
+    ends = time.strftime("%H:%M:%S", time.localtime(time.time() + seconds))
+    if dry_run:
+        return ActionResult(True, f"dry run, nothing was done. Would start a timer of {mytimer.format_duration(seconds)}", command)
+    try:
+        (options.spawn or default_spawn)(command, Path(options.log_dir) / "timer.log")
+    except OSError as exc:
+        return ActionResult(False, f"could not start the timer: {exc}", command)
+    return ActionResult(True, f"timer of {mytimer.format_duration(seconds)} started: it rings at {ends}", command)
 
 
 def open_url(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
@@ -576,6 +595,7 @@ ACTIONS = {
     "shutdown": shutdown,
     "reboot": reboot,
     "weather": weather,
+    "timer": timer,
     "screenshot_full": screenshot_full,
     "screenshot_region": screenshot_region,
     "open_url": open_url,

@@ -60,6 +60,7 @@ TOPICS = {
     "scripts": ("📜", "The scripts folder: what each script is for", "Script"),
     "system": ("🖥️", "This Mac: macOS, chip, memory, disk, versions", "System"),
     "launcher": ("🚀", "What mylauncher itself understands", "Launcher"),
+    "about": ("ℹ️", "Which mylauncher is this: version, files, Python, settings (for debugging)", "About"),
     "screenshot": ("📸", "Screenshots: the macOS shortcuts and the launcher commands", "Screenshot"),
 }
 # Other names that mean the same topic (you wrote "help zsh_alias" and "help zsh_functions").
@@ -416,9 +417,48 @@ def screenshot_rows(config, runner) -> tuple:
     return rows, ""
 
 
+def about_rows(config, runner) -> tuple:
+    """What is running right now: the first thing to send when something does not work."""
+    import myversion
+    from myconfig import find_config_path
+    from mynotify import resolve
+
+    count, fp = myversion.fingerprint()
+    in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+    try:
+        config_path = str(find_config_path(None))
+    except Exception as exc:  # noqa: BLE001 - about must always answer
+        config_path = f"(not found: {exc})"
+    git = _out(runner, ["git", "-C", str(myversion.ROOT), "rev-parse", "--short", "HEAD"])
+    git = "" if git in ("unknown", "not installed") else git
+    dirty = _out(runner, ["git", "-C", str(myversion.ROOT), "status", "--porcelain"]) if git else ""
+    dirty = "" if dirty in ("unknown", "not installed") else dirty
+    facts = [
+        ("Version", f"{myversion.VERSION} ({myversion.STEP}, built {myversion.BUILT})"),
+        ("Files", f"{count} Python files, fingerprint {fp}  (the same fingerprint = the same files)"),
+        ("Project folder", str(myversion.ROOT)),
+        ("Python", f"{sys.version.split()[0]} at {sys.executable}" + ("  (virtual environment)" if in_venv else "  (NOT a virtual environment)")),
+        ("Configuration", config_path),
+        ("Hotkey", "+".join((*config.hotkey_modifiers, config.hotkey_key)) if hasattr(config, "hotkey_modifiers") else "?"),
+        ("Notifications", f"{resolve(config.notify_method)[0]} (setting: {config.notify_method})"),
+        ("Ollama", f"{config.ollama_model} at {config.ollama_host}; prompts: {config.ollama_prompts}" + ("" if Path(config.ollama_prompts).exists() else "  (FILE MISSING)")),
+        ("Weather", f"{config.weather_location or 'here'}, format {config.weather_format}"),
+        ("Timer", f"{config.timer_sound} x{config.timer_repeat}"),
+        ("AeroSpace", "on" if config.aerospace_enabled else "off"),
+        ("Secret file", str(config.secret_file)),
+        ("Log folder", str(config.execute_log_dir.parent)),
+    ]
+    if git:
+        facts.insert(1, ("Git", f"{git}" + (f", {len(dirty.splitlines())} changed file(s)" if dirty else ", clean")))
+    everything = "\n".join(f"{name:<15}{value}" for name, value in facts)
+    rows = [Row("all", "all (copy it for a bug report)", f"{myversion.VERSION}, fingerprint {fp}, Python {sys.version.split()[0]}", everything, everything)]
+    rows += [Row(name, name, value, f"{name}: {value}", value) for name, value in facts]
+    return rows, ""
+
+
 LOADERS = {
     "aliases": alias_rows, "functions": function_rows, "aerospace": aerospace_rows, "espanso": espanso_rows,
-    "skills": skill_rows, "keys": keys_rows, "scripts": script_rows, "system": system_rows, "launcher": launcher_rows, "screenshot": screenshot_rows,
+    "skills": skill_rows, "keys": keys_rows, "scripts": script_rows, "system": system_rows, "launcher": launcher_rows, "screenshot": screenshot_rows, "about": about_rows,
 }
 
 

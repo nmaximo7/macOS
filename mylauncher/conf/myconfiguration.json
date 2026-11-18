@@ -213,6 +213,22 @@
     "clipboard": false,
     "delay_seconds": 1
   },
+  "ollama": {
+    "command": "ollama",
+    "host": "http://127.0.0.1:11434",
+    "model": "qwen3.8:27b",
+    "vision_model": "",
+    "think": false,
+    "keep_alive": "10m",
+    "timeout_seconds": 600,
+    "autostart": true,
+    "prompts_file": "prompts.json",
+    "cache_file": "~/Library/Caches/mylauncher/image-captions.json"
+  },
+  "timer": {
+    "sound": "/System/Library/Sounds/Glass.aiff",
+    "repeat": 3
+  },
   "weather": {
     "location": "",
     "format": "%c+%t",

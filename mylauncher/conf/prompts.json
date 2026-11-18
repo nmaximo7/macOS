@@ -1,0 +1,35 @@
+{
+  "_help": "The prompts of explain, deep_study and describe_image (see docs/02-use.md). Each one is a text or a list of lines. {topic} is replaced by what you type after the command. Change the wording here; nothing else needs to change.",
+  "explain": [
+    "Explain the core concept of `{topic}` to me as if I were a complete beginner.",
+    "Start with a simple definition, then explain how it works and why it matters.",
+    "Use a relatable example or analogy, define any unfamiliar terms, and finish with a brief summary.",
+    "If the concept has common misconceptions, point them out."
+  ],
+  "deep_study": [
+    "Provide intuition and/or an analogy or metaphor to help me better understand.",
+    "Give me examples of this concept in action.",
+    "Help me build a deep, intuitive understanding of `{topic}`.",
+    "Assume I want to understand not just what it is, but why it works and how to reason about it."
+  ],
+  "describe_image": [
+    "Describe this image in detail.",
+    "Start with the main subject and overall scene, then cover the setting, people or objects, their actions and relationships, composition, lighting, colors, and mood.",
+    "Include small but noticeable details that help explain what is happening.",
+    "Distinguish clearly between what is visible and what you're inferring, and don't guess at identities or details that can't be determined from the image."
+  ],
+  "caption_image": [
+    "Describe this image in two or three sentences: the main subject, the setting, what is happening, and the mood.",
+    "Then add one line starting with 'Keywords:' with ten words or short phrases (subjects, themes, symbols, places) someone might search for.",
+    "Say only what is visible; do not guess identities."
+  ],
+  "find_image": [
+    "Topic: {topic}",
+    "",
+    "Below are numbered images, each with its file name and a description.",
+    "Which of them are about the topic? Include an image when its subject, theme, symbolism or meaning clearly fits the topic, even if the exact word is not used (for example a painting of a saint fits 'religious'). The file name is also a clue.",
+    "Answer ONLY with a JSON array of the numbers that match, for example [2, 5, 7]. If none match, answer [].",
+    "",
+    "{list}"
+  ]
+}
