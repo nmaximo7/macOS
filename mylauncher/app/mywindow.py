@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 import tkinter as tk
 from tkinter import messagebox
 
@@ -63,6 +64,7 @@ def bring_to_front(runner=subprocess.run, pid: int | None = None) -> None:
 
 # After these kinds of rows the window says what happened (a copy, a started command...); opening an app needs no message.
 TOAST_KINDS = ("snippet", "help", "secret", "execute", "edit", "kill")
+SHOW_RESULT_IDS = ("cmd:weather",)  # after these the answer stays on screen (like a help row) instead of closing the window
 HINT = "↩ open     ⇥ complete     ⎋ close"
 DETAIL_HINT = "↩ copy     ↑ ↓ scroll     ⎋ back to the list"
 
@@ -170,6 +172,25 @@ class LauncherWindow:
         if self.visible:
             self._resize()
 
+    def tick(self, now=None) -> None:
+        """Once a second (the application calls it): the rows of the running timers count down: 00:02:59, 00:02:58 ..."""
+        if not self.visible or self.detail_item is not None:
+            return
+        rows = [r for r in self.state.results if r.get("kind") == "timer_run"]
+        if not rows:
+            return
+        from mytimer import clock
+
+        now = time.time() if now is None else now
+        expired = False
+        for row in rows:
+            remaining = float(row["detail"]) - now
+            row["title"] = clock(remaining)
+            expired = expired or remaining < -1  # it rang: ask the engine again, the row disappears
+        self._draw_list()
+        if expired:
+            self.refresh()
+
     def _draw_list(self) -> None:
         self.list.draw(self.state.visible, self.state.visible_selected)
 
@@ -228,6 +249,9 @@ class LauncherWindow:
         item = self.detail_item if self.detail_item is not None else self.state.current
         if item is None:
             return "break"
+        if item["kind"] == "result":  # the answer of weather: Enter closes it
+            self.hide()
+            return "break"
         one_enter = item["kind"] == "secret" and item["id"] not in ("secret:*all*", "secret:*vault*")  # a named secret: ONE Enter copies it
         if item["kind"] in ("help", "secret") and self.detail_item is None and item.get("detail") and not one_enter:
             self._open_detail(item)  # first Enter: read it; the next Enter copies it (below)
@@ -245,6 +269,23 @@ class LauncherWindow:
             question = f"{result.message}\n\nForce quit now?"
             if self.confirm(self.config.window_title, question, parent=self.root):
                 result = self.engine.run(item["id"], typed, force=True)
+        if result.ok and item["kind"] in ("timer", "timer_run"):  # stay open: the countdown is the answer
+            self.input.set("timer ")
+            self.refresh()
+            self.status.config(text=f"✔  {result.message}")
+            print("[run] timers shown", flush=True)
+            return "break"
+        if result.ok and item.get("kind") == "news_refresh":  # stay open and show the headlines that were just fetched
+            self.input.set(item.get("complete") or "news ")
+            self.refresh()
+            self.status.config(text=f"✔  {result.message}")
+            print("[run] news shown", flush=True)
+            return "break"
+        if result.ok and item["id"] in SHOW_RESULT_IDS and result.message:
+            self._open_detail({"id": "result", "kind": "result", "icon": item.get("icon", ""), "title": item["title"], "detail": result.message, "confirm": False})
+            self.status.config(text="↩ or ⎋ close")
+            print("[run] result shown in the window", flush=True)
+            return "break"
         if result.ok:
             self.hide()
             print("[run] window hidden", flush=True)

@@ -45,7 +45,7 @@ class Durations(unittest.TestCase):
 class TimerAction(CliCase):
     def test_action_spawns_the_script(self):
         spawned = []
-        options = RunOptions(notify_method="osascript", spawn=lambda c, log: spawned.append((c, str(log))), log_dir=Path(self.tmp))
+        options = RunOptions(notify_method="osascript", spawn=lambda c, log: spawned.append((c, str(log))), log_dir=Path(self.tmp), timer_folder=str(self.tmp / "timers"))
         result = timer(Item("timer:90", "Timer", "timer", "timer", target="90"), options=options)
         self.assertTrue(result.ok)
         self.assertIn("1m 30s", result.message)
@@ -67,7 +67,7 @@ class TimerAction(CliCase):
         self.assertEqual(code, 0)
         self.assertIn("+ 300 ))", self.spawned[0][0][-1])
         for typed in ("timer ", "timer soon"):
-            hint = json.loads(self.call("search", typed, "--json")[1])["results"][0]
+            hint = json.loads(self.call("search", typed, "--json")[1])["results"][-1]
             self.assertEqual(hint["id"], "info:timer")
 
 

@@ -8,8 +8,10 @@ the middle, the timer rings as soon as it wakes up instead of late by the whole 
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
+from pathlib import Path
 
 from mynotify import script_line
 
@@ -56,16 +58,81 @@ def format_duration(seconds: int) -> str:
     return " ".join(f"{n}{u}" for n, u in ((hours, "h"), (minutes, "m"), (secs, "s")) if n) or "0s"
 
 
-def timer_script(seconds: int, notify_method: str, sound: str, repeat: int, label: str = "") -> str:
-    """The shell script: wait (by the clock), notify, ring."""
+def clock(seconds: float) -> str:
+    """90 -> "00:01:30" (what the window shows while counting down)."""
+    seconds = max(0, int(seconds + 0.999))  # 0.2 s left still shows 00:00:01
+    return f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+
+
+# ---- the running timers: one small JSON file each, in a folder (the window and the menu bar read it every second) ----
+
+
+def start_file(folder, seconds: int, now: float, label: str = "") -> Path:
+    folder = Path(folder).expanduser()
+    folder.mkdir(parents=True, exist_ok=True)
+    end = int(now) + int(seconds)
+    path = folder / f"{end}-{int(seconds)}-{int(now * 1000) % 100000}.json"
+    path.write_text(json.dumps({"end": end, "seconds": int(seconds), "label": label}), encoding="utf-8")
+    return path
+
+
+def running(folder, now: float) -> list:
+    """The timers that are counting: [{"id", "end", "seconds", "label", "remaining"}], soonest first. Dead ones are cleaned up."""
+    folder = Path(folder).expanduser()
+    found = []
+    try:
+        files = sorted(folder.glob("*.json"))
+    except OSError:
+        return []
+    for path in files:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            end = int(data["end"])
+        except (OSError, ValueError, KeyError, TypeError):
+            path.unlink(missing_ok=True)
+            continue
+        if end < now - 120:  # its script is gone (a reboot, a kill): forget it
+            path.unlink(missing_ok=True)
+            continue
+        found.append({"id": path.stem, "end": end, "seconds": int(data.get("seconds", 0)), "label": data.get("label", ""), "remaining": end - now})
+    return sorted(found, key=lambda t: t["end"])
+
+
+def cancel(folder, timer_id: str) -> bool:
+    path = Path(folder).expanduser() / f"{Path(timer_id).name}.json"  # .name: no way out of the folder
+    existed = path.exists()
+    path.unlink(missing_ok=True)
+    return existed
+
+
+def timer_script(seconds: int, notify_method: str, sound: str, repeat: int, label: str = "", state_file: str = "", volume: float = 3.0, speak: str = "", system_volume: int = 0) -> str:
+    """The shell script: wait (by the clock; stop quietly if the state file is gone = cancelled), notify, ring.
+
+    volume: afplay's own gain (1 = as recorded, 3 = three times louder). speak: a sentence for `say` (empty = silent).
+    system_volume: 0 = do not touch the Mac's volume; 1-100 = set it for the ring and put it back afterwards (also un-mutes).
+    """
     shown = format_duration(seconds) + (f" ({label})" if label else "")
-    ring = ["i=0", f"while [ $i -lt {int(repeat)} ]; do", f"  /usr/bin/afplay {shlex.quote(sound)} 2>/dev/null || printf '\\a'", "  i=$((i+1))", "done"] if repeat > 0 else []
+    quoted = shlex.quote(state_file) if state_file else ""
+    guard = f' [ -f {quoted} ] || exit 0;' if state_file else ""
+    loud = []
+    if system_volume > 0:
+        loud = ["old=$(/usr/bin/osascript -e 'output volume of (get volume settings)' 2>/dev/null)",
+                f"/usr/bin/osascript -e 'set volume output volume {int(system_volume)}' -e 'set volume without output muted' 2>/dev/null"]
+    ring = []
+    if repeat > 0:
+        ring = ["i=0", f"while [ $i -lt {int(repeat)} ]; do", f"  /usr/bin/afplay -v {float(volume):g} {shlex.quote(sound)} 2>/dev/null || printf '\\a'", "  i=$((i+1))", "done"]
+    if speak.strip():
+        ring.append(f"/usr/bin/say {shlex.quote(speak.strip())} 2>/dev/null")
+    restore = ['[ -n "$old" ] && /usr/bin/osascript -e "set volume output volume $old" 2>/dev/null'] if system_volume > 0 else []
     return "\n".join(
         [
             f"end=$(( $(date +%s) + {int(seconds)} ))",
-            'while [ "$(date +%s)" -lt "$end" ]; do sleep 1; done',
-            f'msg="Time is up: {shown}"'.replace("`", "").replace("$(", "").replace('\\', ""),
+            f'while [ "$(date +%s)" -lt "$end" ]; do{guard} sleep 1; done',
+            *([f"[ -f {quoted} ] || exit 0", f"rm -f {quoted}"] if state_file else []),
+            f'msg="Time is up: {shown}"'.replace("`", "").replace("$(", "").replace("\\", ""),
+            *loud,
             script_line(notify_method, "Timer"),
             *ring,
+            *restore,
         ]
     )

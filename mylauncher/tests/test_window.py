@@ -493,3 +493,67 @@ class NotClosedByAccident(Window):
         self.root.tk.call("::tk::mac::Quit")
         self.assertTrue(self.root.winfo_exists())
         self.assertIn("QUIT", lines[0])
+
+
+class CountdownAndResults(Window):
+    """Step 13: timers count down in the window; weather stays on screen like a help row."""
+
+    def running_row(self, end):
+        return {"id": "timer-run:1", "title": "00:03:00", "kind": "timer_run", "confirm": False, "complete": "timer ", "icon": "⏱️", "badge": "Running",
+                "subtitle": "3m timer", "detail": str(end)}
+
+    def test_the_rows_count_down_second_by_second(self):
+        self.engine.ITEMS = [self.running_row(1000)]
+        self.window.show()
+        self.window.input.set("")
+        self.window.refresh()
+        self.window.tick(now=820)
+        self.assertEqual(self.window.state.results[0]["title"], "00:03:00")
+        self.window.tick(now=821)
+        self.assertEqual(self.window.state.results[0]["title"], "00:02:59")
+        self.window.tick(now=999.5)
+        self.assertEqual(self.window.state.results[0]["title"], "00:00:01")
+
+    def test_a_timer_that_rang_makes_the_window_ask_again(self):
+        self.engine.ITEMS = [self.running_row(1000)]
+        self.window.show()
+        self.window.refresh()
+        before = len(self.engine.searches)
+        self.window.tick(now=1005)
+        self.assertGreater(len(self.engine.searches), before)
+
+    def test_no_work_when_hidden_or_no_timer(self):
+        self.window.tick(now=5)  # hidden: nothing happens, nothing fails
+        self.window.show()
+        self.window.tick(now=5)
+
+    def test_starting_a_timer_keeps_the_window_open_on_the_list(self):
+        self.engine.ITEMS = [{"id": "timer:180", "title": "Timer: 3m", "kind": "timer", "confirm": False, "complete": "timer 180", "icon": "⏱️", "badge": "Timer", "subtitle": ""}]
+        self.engine.run_results = [RunResult(True, "timer of 3m started: it rings at 12:03:00")]
+        self.window.show()
+        self.window.input.set("timer")  # (the fake engine finds rows by their title)
+        self.window._run_selected()
+        self.assertTrue(self.window.visible)
+        self.assertEqual(self.window.input.get().strip(), "timer")
+        self.assertEqual(self.engine.searches[-1].strip(), "timer")  # it asked for the running timers
+        self.assertIn("rings at 12:03:00", self.window.status.cget("text"))
+
+    def test_cancelling_a_row_keeps_the_window_open(self):
+        self.engine.ITEMS = [self.running_row(1000)]
+        self.engine.run_results = [RunResult(True, "timer cancelled")]
+        self.window.show()
+        self.window._run_selected()
+        self.assertEqual(self.engine.ran, ["timer-run:1"])
+        self.assertTrue(self.window.visible)
+
+    def test_weather_stays_on_screen_and_enter_closes_it(self):
+        self.engine.ITEMS = [{"id": "cmd:weather", "title": "weather", "kind": "command", "confirm": False, "complete": "", "icon": "🌤️", "badge": "Command", "subtitle": ""}]
+        self.engine.run_results = [RunResult(True, "☀️ +21°C")]
+        self.window.show()
+        self.window.input.set("weather")
+        self.window._run_selected()
+        self.assertTrue(self.window.visible)
+        self.assertIn("+21°C", self.window.detail.content())
+        self.window._run_selected()  # Enter again: close, and do NOT run weather a second time
+        self.assertFalse(self.window.visible)
+        self.assertEqual(self.engine.ran, ["cmd:weather"])

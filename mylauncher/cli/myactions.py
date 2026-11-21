@@ -37,12 +37,13 @@ import mynotify
 import myaerospace
 import mypower
 import mytimer
+import mynews
 from mysecret import ensure_file
 from mykill import alive, applescript_quote, running_apps
 from mytypes import Item
 
 # Actions that a "command" in the configuration file may use. (Apps always use open_app.)
-COMMAND_ACTIONS = ("shutdown", "reboot", "screenshot_full", "screenshot_region", "weather")
+COMMAND_ACTIONS = ("shutdown", "reboot", "screenshot_full", "screenshot_region", "weather", "briefing")
 
 
 @dataclass
@@ -81,11 +82,18 @@ class RunOptions:
     power_protected: tuple = ("python",)  # applications never touched: the launcher itself
     power_lock: object = None  # a marker file that stops a second request within 2 minutes (None = no guard)
     secret_notify_value: bool = True  # copy_secret: the notification shows the value
-    timer_sound: str = "/System/Library/Sounds/Glass.aiff"  # timer
-    timer_repeat: int = 3  # timer: how many times the sound plays
+    timer_folder: str = "~/.config/mylauncher/timers"  # timer: one file per running timer
+    timer_sound: str = "/System/Library/Sounds/Hero.aiff"  # timer
+    timer_repeat: int = 4  # timer: how many times the sound plays
+    timer_volume: float = 3.0  # timer: afplay gain (1 = as recorded)
+    timer_speak: str = "Time is up"  # timer: said aloud at the end ("" = silent)
+    timer_system_volume: int = 0  # timer: 0 = leave the Mac volume alone; 1-100 = set it for the ring, then restore
     weather_location: str = ""  # weather: "" = wttr.in guesses it from your address; or "Paris", "Madrid"...
     weather_format: str = "%c+%t"  # weather: wttr.in format (%c icon, %t temperature, %h humidity, %w wind...)
     weather_timeout: int = 6  # weather: seconds before giving up
+    news_feeds_file: str = ""  # news: conf/feeds.json
+    news_cache_folder: str = "~/Library/Caches/mylauncher"
+    news_timeout: int = 8
     clear_seconds: int = 30  # copy_secret: empty the clipboard again after this many seconds (0 = never)
     browser_command: tuple = ()  # open_url: ["/…/zen", "-new-tab", "{url}"]; empty = plain `open <url>`
     editor_command: tuple = ("open", "-a", "Visual Studio Code", "{path}")  # edit_file: {path} = the file
@@ -292,20 +300,60 @@ def weather(item: Item, runner=default_runner, dry_run: bool = False, options=No
     return ActionResult(True, text, command)
 
 
+def news_refresh(item: Item, runner=default_runner, dry_run: bool = False, options=None, fetcher=None) -> ActionResult:
+    """Row "Refresh <category> news" (item.target = the category): fetch every feed of it now and fill the cache."""
+    options = options or RunOptions()
+    if dry_run:
+        return ActionResult(True, f"dry run, nothing was done. Would fetch the {item.target} feeds from {options.news_feeds_file}", [])
+    try:
+        categories = mynews.load_feeds(Path(options.news_feeds_file))
+        result = mynews.refresh(categories, item.target, options.news_cache_folder, options.news_timeout, fetcher or mynews.default_fetcher)
+    except mynews.NewsError as error:
+        return ActionResult(False, str(error), [])
+    if not result["entries"]:
+        return ActionResult(False, f"no headlines for {item.target!r}: is the Mac online? ({len(result['failed'])} feed(s) failed)", [])
+    total, bad = len(result["entries"]), len(result["failed"])
+    return ActionResult(True, f"{total} headlines for {item.target!r}" + (f"  ({bad} feed(s) did not answer)" if bad else "") + ".", [])
+
+
+def ml_command(*words) -> str:
+    """The shell line that runs `ml <words>` in a terminal. bash runs the script: no executable bit needed."""
+    return shlex.join(["/bin/bash", str(Path(__file__).resolve().parent / "ml"), *words])
+
+
+def briefing(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """`daily briefing` (a command row): open a terminal that runs  ml daily-briefing."""
+    return execute_terminal(Item(id=item.id, title="daily briefing", kind="ai", action="execute_terminal", target=ml_command("daily-briefing")), runner, dry_run, options)
+
+
 def timer(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
-    """Start a timer in the background (item.target = seconds): when it ends, a notification and a sound."""
+    """Start a timer in the background (item.target = seconds): when it ends, a notification and a sound.
+
+    A small file in `timer.folder` says "this timer is running": the window and the menu bar count down from it,
+    and the script stops quietly when the file is deleted (that is how a timer is cancelled).
+    """
     options = options or RunOptions()
     seconds = int(item.target)
-    script = mytimer.timer_script(seconds, options.notify_method, options.timer_sound, options.timer_repeat)
-    command = [*options.shell, script]
     ends = time.strftime("%H:%M:%S", time.localtime(time.time() + seconds))
     if dry_run:
-        return ActionResult(True, f"dry run, nothing was done. Would start a timer of {mytimer.format_duration(seconds)}", command)
+        return ActionResult(True, f"dry run, nothing was done. Would start a timer of {mytimer.format_duration(seconds)}", [])
     try:
+        state = mytimer.start_file(options.timer_folder, seconds, time.time())
+        script = mytimer.timer_script(seconds, options.notify_method, options.timer_sound, options.timer_repeat, state_file=str(state), volume=options.timer_volume, speak=options.timer_speak, system_volume=options.timer_system_volume)
+        command = [*options.shell, script]
         (options.spawn or default_spawn)(command, Path(options.log_dir) / "timer.log")
     except OSError as exc:
-        return ActionResult(False, f"could not start the timer: {exc}", command)
+        return ActionResult(False, f"could not start the timer: {exc}", [])
     return ActionResult(True, f"timer of {mytimer.format_duration(seconds)} started: it rings at {ends}", command)
+
+
+def timer_cancel(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """Cancel a running timer (item.target = its id)."""
+    options = options or RunOptions()
+    if dry_run:
+        return ActionResult(True, "dry run, nothing was done", [])
+    done = mytimer.cancel(options.timer_folder, item.target)
+    return ActionResult(True, "timer cancelled" if done else "that timer had already ended", [])
 
 
 def open_url(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
@@ -596,6 +644,9 @@ ACTIONS = {
     "reboot": reboot,
     "weather": weather,
     "timer": timer,
+    "timer_cancel": timer_cancel,
+    "briefing": briefing,
+    "news_refresh": news_refresh,
     "screenshot_full": screenshot_full,
     "screenshot_region": screenshot_region,
     "open_url": open_url,

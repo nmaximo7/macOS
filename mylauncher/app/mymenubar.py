@@ -96,6 +96,14 @@ class MenuBar:
             ns.NSApplication.sharedApplication().setActivationPolicy_(ACCESSORY_POLICY)
         self._ns = ns
 
+    def set_title(self, text: str) -> None:
+        """Change the text of the icon (the timer shows its countdown here). Never raises."""
+        try:
+            if self._item is not None:
+                self._item.button().setTitle_(text)
+        except Exception:  # noqa: BLE001 - a title that cannot change must not stop anything
+            pass
+
     def stop(self) -> None:
         if self._item is not None:
             self._ns.NSStatusBar.systemStatusBar().removeStatusItem_(self._item)

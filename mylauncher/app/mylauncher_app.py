@@ -19,11 +19,13 @@ just drops a message in a queue, and the main thread looks at the queue 10 times
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import faulthandler
 import os
 import queue
 import signal
 import sys
+import time
 from pathlib import Path
 
 # The app reads the settings through the same code as the CLI (cli/myconfig.py), so a mistake in the
@@ -32,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "cli"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from myconfig import ConfigError, find_config_path, load_config  # noqa: E402
+import mytimer  # noqa: E402
 from myengine import Engine  # noqa: E402
 from mymenubar import MenuBar  # noqa: E402
 from myhotkey import HotkeyListener, describe, permission_report, watch_keys  # noqa: E402
@@ -44,6 +47,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", metavar="FILE", help="configuration file")
     parser.add_argument("--show", action="store_true", help="show the window right away")
     parser.add_argument("--toast-test", action="store_true", help="show the toast for 3 seconds, with the window hidden, and exit")
+    parser.add_argument("--timer-test", action="store_true", help="a 6 second timer: big clock, then confetti, and exit")
     parser.add_argument("--hotkey-test", action="store_true", help="only print a line when the hotkey is pressed")
     parser.add_argument("--keys", action="store_true", help="print EVERY key the program can see (to diagnose permissions)")
     return parser
@@ -68,6 +72,30 @@ def keys_test() -> int:
         listener.join()
     except KeyboardInterrupt:
         pass
+    return 0
+
+
+def timer_test(config) -> int:
+    """Try the big clock and the confetti without waiting for a real timer (6 seconds)."""
+    import tkinter as tk
+    from mytheme import make_theme
+    from mytimerdisplay import TimerDisplay
+    root = tk.Tk()
+    root.withdraw()
+    display = TimerDisplay(dataclasses.replace(config, timer_big_clock_seconds=60, timer_big_clock=True, timer_confetti=True), make_theme(config), root.after)
+    start = time.time()
+
+    def step():
+        left = 6 - (time.time() - start)
+        display.update([{"id": "test", "remaining": left}] if left > 0 else [], time.time())
+        if left > -10:
+            root.after(250 if left > 0 else 500, step)
+        else:
+            root.destroy()
+    # the first call sees 6 s, the later ones count down; when 0 is reached the timer "vanishes" and the confetti starts
+    step()
+    root.mainloop()
+    print("timer test finished")
     return 0
 
 
@@ -176,6 +204,29 @@ def run(config, config_path, show: bool) -> int:
             print(f"warning: no menu bar icon ({exc})", file=sys.stderr, flush=True)
             bar = None
 
+    from mytheme import make_theme
+    from mytimerdisplay import TimerDisplay
+    display = TimerDisplay(config, make_theme(config), root.after)
+    shown_title = [None]
+
+    def tick() -> None:
+        """Every second: the window's countdown rows, and the menu bar title (the soonest timer: ⏱ 00:02:59)."""
+        try:
+            now = time.time()
+            window.tick(now)
+            timers = mytimer.running(config.timer_folder, now)
+            display.update(timers, now)
+            if bar is not None:
+                title = f"⏱ {mytimer.clock(timers[0]['remaining'])}" if timers else config.menubar_title
+                if title != shown_title[0]:
+                    shown_title[0] = title
+                    bar.set_title(title)
+        except Exception:  # noqa: BLE001 - the clock must never stop the launcher
+            pass
+        root.after(1000, tick)
+
+    root.after(1000, tick)
+
     def poll() -> None:
         while True:
             try:
@@ -279,6 +330,8 @@ def main(argv=None) -> int:
         return keys_test()
     if args.toast_test:
         return toast_test(config)
+    if args.timer_test:
+        return timer_test(config)
     return hotkey_test(config) if args.hotkey_test else run(config, config_path, args.show)
 
 

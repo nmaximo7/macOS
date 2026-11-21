@@ -35,6 +35,9 @@ def good_config(folders=(), **changes) -> dict:
         data["expander"] = {"copy_log": "", "paste": False, **data.get("expander", {})}
     if isinstance(data.get("power", {}), dict):
         data["power"] = {"lock_file": "", **data.get("power", {})}  # no marker file in the real ~/Library
+    if isinstance(data.get("timer", {}), dict):
+        import tempfile
+        data["timer"] = {"folder": tempfile.mkdtemp(prefix="timers-"), **data.get("timer", {})}  # never the real ~/.config/mylauncher/timers
     if isinstance(data.get("notifications", {}), dict):
         data["notifications"] = {"toast": True, **data.get("notifications", {})}  # the toast is off by default; most window tests want it on  # tests never write into the real ~/Library/Logs
     return data

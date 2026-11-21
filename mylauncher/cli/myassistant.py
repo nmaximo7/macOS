@@ -317,3 +317,41 @@ def find_images(config, folder, topic: str, prompts_path=None, names_only=False,
         reply = quiet_generate(config, payload(config, prompt), opener, spawn, sleep, err)
         chosen += [part[n - 1][0] for n in parse_numbers(reply, len(part))]
     return chosen
+
+
+def unique_target(dest: Path, name: str, source: Path):
+    """(path, status): the same file already there -> "same"; another file with that name -> name_2.ext; else the name."""
+    import filecmp
+
+    target = dest / name
+    counter = 2
+    while target.exists():
+        if filecmp.cmp(source, target, shallow=False):
+            return target, "same"
+        target = dest / f"{Path(name).stem}_{counter}{Path(name).suffix}"
+        counter += 1
+    return target, "copied"
+
+
+def copy_images(config, folder, topic: str, destination, dry_run=False, **find_kwargs) -> list:
+    """find_images(), then copy what was found into `destination`. Returns [(source, target, "copied"|"same"|"would")]."""
+    import shutil
+
+    found = find_images(config, folder, topic, **find_kwargs)
+    dest = Path(destination).expanduser().absolute()
+    if found and dest.exists() and not dest.is_dir():
+        raise AssistantError(f"{dest} exists and is not a folder")
+    result = []
+    taken = set()
+    for source in found:
+        target, status = unique_target(dest, source.name, source) if dest.is_dir() else (dest / source.name, "copied")
+        while target in taken:  # two pictures of different folders with the same name, not yet written (dry run)
+            target = target.with_name(f"{target.stem}_x{target.suffix}")
+        taken.add(target)
+        if status == "copied" and dry_run:
+            status = "would"
+        elif status == "copied":
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        result.append((source, target, status))
+    return result

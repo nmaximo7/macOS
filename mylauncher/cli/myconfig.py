@@ -57,6 +57,18 @@ class CommandDef:
     description: str = ""  # grey text under/after the title
 
 
+BRIEFING_DEFAULTS = {
+    "gog": "gog",
+    "qmd": "qmd",
+    "calendar_days": 8,
+    "mail_query": "in:inbox",
+    "mail_limit": 8,
+    "todo_file": "$HOME/macOS/docs/assets/Todo.md",
+    "max_chars": 20000,
+    "save_folder": "",
+}
+
+
 @dataclass(frozen=True)
 class Config:
     """All the settings, checked and with the right types."""
@@ -152,8 +164,32 @@ class Config:
     ollama_timeout: int = 600
     ollama_autostart: bool = True
     ollama_prompts: Path = Path("prompts.json")  # relative paths: next to myconfiguration.json
-    timer_sound: str = "/System/Library/Sounds/Glass.aiff"
-    timer_repeat: int = 3
+    timer_folder: str = "~/.config/mylauncher/timers"  # one small file per running timer (the window counts down from them)
+    images_folder: str = ""  # copy_image_topic: where to look when you type only the topic
+    images_destination: str = ""  # copy_image_topic: where to copy to when you type only the topic
+    briefing: dict = field(default_factory=lambda: dict(BRIEFING_DEFAULTS))
+    timer_sound: str = "/System/Library/Sounds/Hero.aiff"
+    timer_repeat: int = 4
+    timer_volume: float = 3.0
+    timer_speak: str = "Time is up"
+    timer_system_volume: int = 0
+    timer_big_clock: bool = True
+    timer_confetti: bool = True
+    timer_big_clock_seconds: int = 30
+    create_image_backend: str = "ollama"
+    create_image_ollama_model: str = "x/z-image-turbo"
+    create_image_openrouter_model: str = "bytedance-seed/seedream-4.5"
+    create_image_folder: str = "~/Pictures/mylauncher"
+    create_image_timeout: int = 180
+    create_image_open_after: bool = True
+    create_image_keychain_service: str = "justtothepoint-toolkit"
+    create_image_keychain_user: str = "OPENROUTER_API_KEY"
+    news_feeds_file: Path = Path("feeds.json")
+    news_default: str = "news"
+    news_cache_minutes: int = 15
+    news_days: int = 7
+    news_timeout: int = 8
+    news_cache_folder: str = "~/Library/Caches/mylauncher"
     weather_location: str = ""
     weather_format: str = "%c+%t"
     weather_timeout: int = 6
@@ -330,10 +366,48 @@ def parse_config(data, path: Path) -> Config:
         ollama_prompts = Path(path).parent / ollama_prompts
     ollama_cache = _check(ollama_section.get("cache_file", "~/Library/Caches/mylauncher/image-captions.json"), str, "ollama.cache_file").strip()
     timer_section = _check(data.get("timer", {}), dict, "timer")
-    timer_sound = _check(timer_section.get("sound", "/System/Library/Sounds/Glass.aiff"), str, "timer.sound").strip()
-    timer_repeat = _check(timer_section.get("repeat", 3), int, "timer.repeat")
+    timer_folder = _check(timer_section.get("folder", "~/.config/mylauncher/timers"), str, "timer.folder").strip() or "~/.config/mylauncher/timers"
+    images_section = _check(data.get("images", {}), dict, "images")
+    images_folder = _check(images_section.get("folder", ""), str, "images.folder").strip()
+    images_destination = _check(images_section.get("destination", ""), str, "images.destination").strip()
+    briefing_section = _check(data.get("briefing", {}), dict, "briefing")
+    briefing = dict(BRIEFING_DEFAULTS)
+    for b_name, b_default in BRIEFING_DEFAULTS.items():  # (b_ names: `key` is the hotkey's, used further down)
+        briefing[b_name] = _check(briefing_section.get(b_name, b_default), type(b_default), f"briefing.{b_name}")
+    if not 0 <= briefing["calendar_days"] <= 60 or not 0 <= briefing["mail_limit"] <= 100:
+        raise ConfigError("briefing.calendar_days must be 0-60 and briefing.mail_limit 0-100 (0 = leave that source out)")
+    timer_sound = _check(timer_section.get("sound", "/System/Library/Sounds/Hero.aiff"), str, "timer.sound").strip()
+    timer_repeat = _check(timer_section.get("repeat", 4), int, "timer.repeat")
     if not 0 <= timer_repeat <= 20:
         raise ConfigError("timer.repeat must be between 0 and 20")
+    timer_volume = timer_section.get("volume", 3.0)
+    if isinstance(timer_volume, bool) or not isinstance(timer_volume, (int, float)) or not 0 < timer_volume <= 20:
+        raise ConfigError("timer.volume must be a number above 0 and up to 20 (1 = as recorded)")
+    timer_speak = _check(timer_section.get("speak", "Time is up"), str, "timer.speak")
+    timer_system_volume = _check(timer_section.get("system_volume", 0), int, "timer.system_volume")
+    if not 0 <= timer_system_volume <= 100:
+        raise ConfigError("timer.system_volume must be 0 (do not touch) to 100")
+    timer_big_clock = _check(timer_section.get("big_clock", True), bool, "timer.big_clock")
+    timer_confetti = _check(timer_section.get("confetti", True), bool, "timer.confetti")
+    timer_big_clock_seconds = _check(timer_section.get("big_clock_seconds", 30), int, "timer.big_clock_seconds")
+    if timer_big_clock_seconds < 1:
+        raise ConfigError("timer.big_clock_seconds must be 1 or more (the big clock appears when this many seconds are left)")
+    ci = _check(data.get("create_image", {}), dict, "create_image")
+    ci_backend = _check(ci.get("backend", "ollama"), str, "create_image.backend").strip().lower()
+    if ci_backend not in ("ollama", "openrouter"):
+        raise ConfigError("create_image.backend must be \"ollama\" or \"openrouter\"")
+    ci_timeout = _check(ci.get("timeout_seconds", 180), int, "create_image.timeout_seconds")
+    if ci_timeout < 5:
+        raise ConfigError("create_image.timeout_seconds must be 5 or more")
+    news_section = _check(data.get("news", {}), dict, "news")
+    news_feeds = Path(_check(news_section.get("feeds_file", "feeds.json"), str, "news.feeds_file")).expanduser()
+    if not news_feeds.is_absolute():
+        news_feeds = Path(path).parent / news_feeds
+    news_cache_minutes = _check(news_section.get("cache_minutes", 15), int, "news.cache_minutes")
+    news_days = _check(news_section.get("days", 7), int, "news.days")
+    news_timeout = _check(news_section.get("timeout_seconds", 8), int, "news.timeout_seconds")
+    if news_cache_minutes < 0 or news_days < 1 or not 1 <= news_timeout <= 12:
+        raise ConfigError("news: cache_minutes >= 0, days >= 1, timeout_seconds between 1 and 12 (a refresh from the window must end in 15 s)")
     weather_section = _check(data.get("weather", {}), dict, "weather")
     weather_location = _check(weather_section.get("location", ""), str, "weather.location").strip()
     weather_format = _check(weather_section.get("format", "%c+%t"), str, "weather.format").strip() or "%c+%t"
@@ -576,8 +650,32 @@ def parse_config(data, path: Path) -> Config:
         ollama_timeout=ollama_timeout,
         ollama_autostart=_check(ollama_section.get("autostart", True), bool, "ollama.autostart"),
         ollama_prompts=ollama_prompts,
+        timer_folder=timer_folder,
+        images_folder=images_folder,
+        images_destination=images_destination,
+        briefing=briefing,
         timer_sound=timer_sound,
         timer_repeat=timer_repeat,
+        timer_volume=float(timer_volume),
+        timer_speak=timer_speak,
+        timer_system_volume=timer_system_volume,
+        timer_big_clock=timer_big_clock,
+        timer_confetti=timer_confetti,
+        timer_big_clock_seconds=timer_big_clock_seconds,
+        create_image_backend=ci_backend,
+        create_image_ollama_model=_check(ci.get("ollama_model", "x/z-image-turbo"), str, "create_image.ollama_model").strip(),
+        create_image_openrouter_model=_check(ci.get("openrouter_model", "bytedance-seed/seedream-4.5"), str, "create_image.openrouter_model").strip(),
+        create_image_folder=_check(ci.get("folder", "~/Pictures/mylauncher"), str, "create_image.folder").strip() or "~/Pictures/mylauncher",
+        create_image_timeout=ci_timeout,
+        create_image_open_after=_check(ci.get("open_after", True), bool, "create_image.open_after"),
+        create_image_keychain_service=_check(ci.get("keychain_service", "justtothepoint-toolkit"), str, "create_image.keychain_service"),
+        create_image_keychain_user=_check(ci.get("keychain_user", "OPENROUTER_API_KEY"), str, "create_image.keychain_user"),
+        news_feeds_file=news_feeds,
+        news_default=_check(news_section.get("default_category", "latest"), str, "news.default_category").strip() or "news",
+        news_cache_minutes=news_cache_minutes,
+        news_days=news_days,
+        news_timeout=news_timeout,
+        news_cache_folder=_check(news_section.get("cache_folder", "~/Library/Caches/mylauncher"), str, "news.cache_folder"),
         weather_location=weather_location,
         weather_format=weather_format,
         weather_timeout=weather_timeout,

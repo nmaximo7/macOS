@@ -186,6 +186,21 @@
       "confirm": false,
       "icon": "🌤️",
       "description": "Weather now, in a notification  ·  the same as: curl -s \"wttr.in/?format=%c+%t\""
+    },
+    {
+      "id": "briefing",
+      "title": "daily briefing",
+      "action": "briefing",
+      "keywords": [
+        "briefing",
+        "daily",
+        "morning",
+        "agenda",
+        "today"
+      ],
+      "confirm": false,
+      "icon": "📋",
+      "description": "Calendar + inbox + to-do, written by the local model  ·  ml daily-briefing"
     }
   ],
   "notifications": {
@@ -226,8 +241,15 @@
     "cache_file": "~/Library/Caches/mylauncher/image-captions.json"
   },
   "timer": {
-    "sound": "/System/Library/Sounds/Glass.aiff",
-    "repeat": 3
+    "sound": "/System/Library/Sounds/Hero.aiff",
+    "repeat": 4,
+    "folder": "~/.config/mylauncher/timers",
+    "volume": 3,
+    "speak": "Time is up",
+    "system_volume": 0,
+    "big_clock": true,
+    "big_clock_seconds": 30,
+    "confetti": true
   },
   "weather": {
     "location": "",
@@ -237,5 +259,37 @@
   "power": {
     "force": true,
     "grace_seconds": 8
+  },
+  "images": {
+    "folder": "/Volumes/MacDatosMaster/justtothepoint/static/education/",
+    "destination": "~/macOS/claude/skills/daily-gospel/assets"
+  },
+  "briefing": {
+    "gog": "gog",
+    "qmd": "qmd",
+    "calendar_days": 8,
+    "mail_query": "in:inbox",
+    "mail_limit": 8,
+    "todo_file": "$HOME/macOS/docs/assets/Todo.md",
+    "max_chars": 20000,
+    "save_folder": ""
+  },
+  "news": {
+    "feeds_file": "feeds.json",
+    "default_category": "latest",
+    "cache_minutes": 15,
+    "days": 7,
+    "timeout_seconds": 8,
+    "cache_folder": "~/Library/Caches/mylauncher"
+  },
+  "create_image": {
+    "backend": "ollama",
+    "ollama_model": "x/z-image-turbo",
+    "openrouter_model": "bytedance-seed/seedream-4.5",
+    "folder": "~/Pictures/mylauncher",
+    "timeout_seconds": 180,
+    "open_after": true,
+    "keychain_service": "justtothepoint-toolkit",
+    "keychain_user": "OPENROUTER_API_KEY"
   }
 }

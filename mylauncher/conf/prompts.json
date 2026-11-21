@@ -31,5 +31,22 @@
     "Answer ONLY with a JSON array of the numbers that match, for example [2, 5, 7]. If none match, answer [].",
     "",
     "{list}"
+  ],
+  "daily_briefing": [
+    "Today is {today}. Write my daily briefing in Markdown, short and practical, from the three sources below.",
+    "1. **Today and the next days**: my meetings in order (time, title, place or link), and anything that clashes or needs preparation.",
+    "2. **Mail that needs me**: from the inbox list, the messages that probably need a reply or action (sender, subject, why), then a one-line mention of the rest.",
+    "3. **To-do**: the three to five things I should do first today, taking the calendar into account, and what can wait.",
+    "4. **One line** of advice for the day.",
+    "Use only what is in the data; if a source is missing or empty, say so in one line and do not invent anything.",
+    "",
+    "## Calendar (JSON from `gog cal list`)",
+    "{calendar}",
+    "",
+    "## Inbox (JSON from `gog gmail search`)",
+    "{mail}",
+    "",
+    "## To-do file",
+    "{todo}"
   ]
 }

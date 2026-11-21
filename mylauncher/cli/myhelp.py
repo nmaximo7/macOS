@@ -73,6 +73,7 @@ SYNONYMS = {
     "key": "keys", "keyboard": "keys", "shortcuts": "keys", "cheatsheets": "keys", "sections": "keys",
     "script": "scripts",
     "sys": "system", "info": "system", "mac": "system",
+    "commands": "launcher", "command": "launcher", "cli": "launcher", "all": "launcher",
     "app": "launcher", "mylauncher": "launcher",
 }
 CACHED = ("aliases", "system")  # the slow ones (they start programs)
@@ -372,19 +373,23 @@ def system_rows(config, runner) -> tuple:
 # launcher: what mylauncher itself understands (built from the configuration)
 # --------------------------------------------------------------------------- #
 def launcher_rows(config, runner) -> tuple:
-    rows = [
-        Row("hotkey", "hotkey", "+".join(config.hotkey_modifiers) + "+" + config.hotkey_key, "Shows or hides the window.", ""),
-        Row("run", config.run_word, "lists every application", f"{config.run_word}            all applications\n{config.run_word} saf        filter them", ""),
-        Row("kill", config.kill_word, "close an application", f"{config.kill_word} <name>     quits it; asks before a force quit", ""),
-        Row("help", config.help_word, "this help", f"{config.help_word}              the topics\n{config.help_word} aliases      a topic\n{config.help_word} functions x  a topic, filtered by x", ""),
-        Row("edit", config.edit_word, "open a file in your editor", f"{config.edit_word} <name>   opens a file of edit.json in the editor ({' '.join(config.edit_editor)})", ""),
-        Row("execute", config.execute_word, "run one of your commands", f"{config.execute_word} <name>   runs a command of execute.json (in a terminal or in the background)", ""),
-        Row("secret", config.secret_word, "your secrets, values hidden", f"{config.secret_word} google   copies the value and shows it in the notification\n{config.secret_word} private_vault   the private_notes of every entry\n{config.secret_word}   the entries of the secret file; Enter shows one, Enter again copies it (the clipboard is emptied after {config.secret_clear_seconds} s)\n{config.secret_edit_word}   opens the file in the editor", ""),
-        Row("screenshot", "screenshot", "full_screen or region", "screenshot full_screen   the whole screen\nscreenshot region        drag to choose an area\nhelp screenshot          the macOS shortcuts (⇧⌘3, ⇧⌘4, ⇧⌘5)", ""),
-        Row("weather", "weather", "the weather now (wttr.in)", "weather   one line (icon and temperature) in a notification; place and format: the \"weather\" section of the configuration", ""),
-        Row("reboot", "reboot", "restart the Mac (asks first)", "reboot   asks, then restarts the Mac", ""),
-        Row("snippets", ";", "snippet groups, then snippets", "; lists the groups; ;p the snippets of the group ;p. Enter copies the text.", ""),
-    ]
+    """Every command, with its launcher word and its terminal twin (the list is cli/mycatalog.py)."""
+    import mycatalog
+
+    rows = [Row("hotkey", "hotkey", "+".join(config.hotkey_modifiers) + "+" + config.hotkey_key, "Shows or hides the window.", "")]
+    for e in mycatalog.entries(config):
+        title = e.word or "terminal"
+        twin = f"   ⌨ {e.cli.split('  ·  ')[0].strip()}" if e.cli else "   (launcher only)"
+        lines = [e.summary, ""]
+        if e.launcher:
+            lines += ["In the launcher:", f"  {e.launcher}"]
+        if e.cli:
+            lines += ["In a terminal:", f"  {e.cli}"]
+        if e.text:
+            lines += ["", e.text]
+        if e.section:
+            lines += ["", f"Settings: the `{e.section}` section of conf/myconfiguration.json"]
+        rows.append(Row(f"cmd:{title}", title, e.summary + twin, "\n".join(lines), e.cli.split("  ·  ")[0].replace("ml ", "ml ", 1).strip() if e.cli else ""))
     for link in config.quicklinks:
         rows.append(Row(f"link:{link.keyword}", link.keyword, f"web search: {link.title}", f"{link.keyword} <text>   opens {link.url}", ""))
     for key, what in (("↓ ↑", "move"), ("Tab", "complete"), ("Enter", "do / open details"), ("Esc", "back / close")):
@@ -538,6 +543,13 @@ def parse_help_query(config, query: str) -> tuple:
     word_end = len(m.group(1))
     second, rest = m.group(3) or "", (m.group(4) or "").strip()
     topic = resolve_topic(second) if second else ""
+    if not topic and second:
+        import mycatalog
+
+        if second.lower() in mycatalog.words(config):  # "help timer": the row of that command
+            word = second.lower().replace("-", "_")
+            word = {"daily": "briefing", "daily_briefing": "briefing"}.get(word, word)
+            return "launcher", word, word_end + len(m.group(2)) + len(second)
     if topic:
         return topic, rest, word_end + len(m.group(2)) + len(second)
     return "", " ".join(part for part in (second, rest) if part), word_end

@@ -46,7 +46,7 @@ import shlex
 import time
 from pathlib import Path
 
-from myactions import ACTIONS, RunOptions, default_runner, default_spawn, run_item
+from myactions import ACTIONS, RunOptions, ml_command, default_runner, default_spawn, run_item
 from myapps import find_apps
 from myconfig import Config, ConfigError, find_config_path, load_config
 import myespanso
@@ -57,7 +57,10 @@ from mysecret import add_name, set_notes, build_secret_items, edit_item, file_pr
 from mynotify import resolve as resolve_notifier, send as send_notification
 import myversion
 import mytimer
+import mynews
+import myimage
 import myassistant
+import mybriefing
 from myhelp import TOPICS, help_end, help_search
 from myhistory import History
 from mykill import running_apps
@@ -172,6 +175,7 @@ def build_items(config: Config) -> list:
         ("timer", "Timer (timer <time>)", "timer 90, timer 5m, timer 1h30m: notification and sound at the end", "⏱️"),
         ("explain", "Explain a concept (explain <topic>)", "Local model, beginner explanation; the prompt is in prompts.json", "🧠"),
         ("deep_study", "Deep study (deep_study <topic>)", "Intuition, analogies, examples, why it works", "🔬"),
+        ("copy_image_topic", "Copy images about a topic (copy_image_topic <topic>)", "Pictures that fit the topic, from your images folder to the destination folder", "🗂️"),
         ("describe_image", "Describe an image (describe_image <file>)", "Detailed description of a picture; no file = the newest screenshot", "🖼️"),
     ):
         items.append(Item(id=f"prefix:{word}", title=title, kind="prefix", action="prefix_hint", keywords=(word, word.replace("_", " ")), complete=f"{word} ", subtitle=subtitle, icon=icon))
@@ -269,12 +273,10 @@ def snippet_problem(config: Config) -> Item | None:
     return Item(id="info:snippets", title=title, kind="prefix", action="prefix_hint", complete=";", subtitle=hint, icon="⚠️", badge="Fix")
 
 
-TOOL_WORDS = ("about", "timer", "explain", "deep_study", "deep-study", "describe_image", "describe-image")
+TOOL_WORDS = ("about", "timer", "explain", "deep_study", "deep-study", "describe_image", "describe-image", "copy_image_topic", "copy-image-topic", "news", "create_image")
 
 
-def _ml_command(*words) -> str:
-    """The shell line that runs `ml <words>` (what the terminal window executes)."""
-    return shlex.join(["/bin/bash", str(Path(__file__).resolve().parent / "ml"), *words])  # bash runs it: no need for the executable bit
+_ml_command = ml_command
 
 
 def tool_items(config: Config, word: str, rest: str) -> list:
@@ -282,12 +284,43 @@ def tool_items(config: Config, word: str, rest: str) -> list:
     word = word.replace("-", "_")
     if word == "timer":
         seconds = mytimer.parse_duration(rest) if rest.strip() else None
+        if not rest.strip():  # "timer " alone: the timers that are counting down (the window redraws them every second)
+            now = time.time()
+            rows = [Item(id=f"timer-run:{t['id']}", title=mytimer.clock(t["remaining"]), kind="timer_run", action="timer_cancel", target=t["id"],
+                         subtitle=f"{mytimer.format_duration(t['seconds'])} timer, rings at {time.strftime('%H:%M:%S', time.localtime(t['end']))}  ·  Enter cancels it",
+                         detail=str(t["end"]), complete="timer ", icon="⏱️", badge="Running") for t in mytimer.running(config.timer_folder, now)]
+            hint = Item(id="info:timer", title="Timer: how long?" if not rows else "New timer: how long?", kind="prefix", action="prefix_hint", complete="timer ",
+                        subtitle="type the time: 90, 90s, 5m, 1h30m, 1:30", icon="⏱️", badge="Timer")
+            return [*rows, hint]
         if seconds is None:
             sub = "type the time: 90, 90s, 5m, 1h30m, 1:30" + (f"   ({rest!r} is not a time)" if rest.strip() else "")
             return [Item(id="info:timer", title="Timer: how long?", kind="prefix", action="prefix_hint", complete="timer ", subtitle=sub, icon="⏱️", badge="Timer")]
         ends = time.strftime("%H:%M:%S", time.localtime(time.time() + seconds))
         return [Item(id=f"timer:{seconds}", title=f"Timer: {mytimer.format_duration(seconds)}", kind="timer", action="timer", target=str(seconds),
                      complete=f"timer {rest.strip()}", subtitle=f"rings at {ends}: notification and sound", icon="⏱️", badge="Timer")]
+    if word == "news":
+        return news_items(config, rest)
+    if word == "create_image":
+        prompt, folder = myimage.split_folder(rest, config.create_image_folder)
+        if not prompt.strip():
+            return [Item(id="info:create_image", title="Create image: what should it show?", kind="prefix", action="prefix_hint", complete="create image ",
+                         subtitle="create image a red fox in the snow [FOLDER]   (folder = last word starting with / or ~)", icon="🎨", badge="Image")]
+        return [Item(id="ai:create_image", title=f"Create image: {prompt}", kind="ai", action="execute_terminal", target=_ml_command("create-image", "--", rest.strip()),
+                     complete=f"create image {rest.strip()}", subtitle=f"{config.create_image_backend}: {config.create_image_ollama_model if config.create_image_backend == 'ollama' else config.create_image_openrouter_model}  →  {folder}",
+                     icon="🎨", badge="Image")]
+    if word == "copy_image_topic":
+        parts = [p.strip() for p in rest.split("|")]
+        usage = "copy_image_topic FOLDER | TOPIC | DESTINATION     (or just  copy_image_topic TOPIC  with the folders of the `images` section)"
+        if len(parts) == 1 and parts[0] and config.images_folder and config.images_destination:
+            folder, topic, dest = config.images_folder, parts[0], config.images_destination
+        elif len(parts) == 3 and all(parts):
+            folder, topic, dest = parts
+        else:
+            return [Item(id="info:copy_image_topic", title="Copy images about a topic: how?", kind="prefix", action="prefix_hint", complete="copy_image_topic ",
+                         subtitle=usage, icon="🗂️", badge="Images")]
+        return [Item(id="ai:copy_image_topic", title=f"Copy images about {topic!r}", kind="ai", action="execute_terminal",
+                     target=_ml_command("copy-image-topic", "--", folder, topic, dest), complete=f"copy_image_topic {rest}".rstrip(),
+                     subtitle=f"{folder}  →  {dest}", icon="🗂️", badge="Images")]
     kind = {"explain": "explain", "deep_study": "deep_study", "describe_image": "describe_image"}.get(word)
     if kind is None:
         return []
@@ -313,12 +346,49 @@ def tool_items(config: Config, word: str, rest: str) -> list:
                  complete=f"{kind} {rest.strip()}", subtitle=f"opens a terminal and asks {config.ollama_model} (prompt: prompts.json)", icon=icon, badge=what)]
 
 
+def normalize_query(query: str) -> str:
+    """'create image x' and 'create-image x' become 'create_image x' (same length, so the coloured prefix stays right)."""
+    return re.sub(r"^(\s*)create[ -]image(?=\s|$)", r"\1create_image", query, flags=re.IGNORECASE)
+
+
+def news_items(config: Config, rest: str) -> list:
+    """`news`, `news games`, `news finance bitcoin`: a refresh row, then the cached headlines (never the network: it must answer at once)."""
+    try:
+        categories = mynews.load_feeds(config.news_feeds_file)
+    except mynews.NewsError as error:
+        return [Item(id="info:news", title="News: the feeds file has a problem", kind="prefix", action="prefix_hint", complete="news ", subtitle=str(error)[:140], icon="📰", badge="News")]
+    category, words = mynews.split_query(categories, config.news_default if config.news_default in categories else sorted(categories)[0], rest)
+    cache = mynews.read_cache(config.news_cache_folder, category)
+    now = time.time()
+    if cache:
+        stamp = f"last fetched {mynews.age(float(cache.get('fetched_at', 0)), now)}"
+        title = f"Refresh {category} news"
+    else:
+        stamp = "nothing fetched yet: Enter downloads the feeds (a few seconds)"
+        title = f"Fetch the {category} news"
+    rows = [Item(id=f"news-refresh:{category}", title=title, kind="news_refresh", action="news_refresh", target=category,
+                 complete=f"news {category} {words}".rstrip(), subtitle=f"{stamp}  ·  {len(categories[category])} feeds", icon="🔄", badge="News")]
+    entries = mynews.select(cache["entries"], words, config.news_days, now) if cache else []
+    for e in entries[: config.max_browse_results]:
+        if e["url"].startswith(("http://", "https://")):
+            rows.append(Item(id=f"news:{e['url']}", title=e["title"], kind="news", action="open_url", target=e["url"], complete=f"news {category} {words}".rstrip(),
+                             subtitle=f"{e['source']}  ·  {mynews.age(e['date'], now)}", detail=e["summary"], icon="📰", badge=category.title()))
+    if cache and not entries:
+        rows.append(Item(id="info:news-none", title="No headline matches", kind="prefix", action="prefix_hint", complete=f"news {category} ", subtitle=f"in {category} (last {config.news_days} days): {words!r}", icon="📰", badge="News"))
+    if not words:  # the other categories, one row each
+        for other in sorted(categories):
+            if other != category:
+                rows.append(Item(id=f"info:news-{other}", title=f"News: {other}", kind="prefix", action="prefix_hint", complete=f"news {other} ", subtitle=f"{len(categories[other])} feeds", icon="📰", badge="News"))
+    return rows
+
+
 def detect_mode(config: Config, query: str) -> tuple:
     """(mode, n): what the launcher understood and how many characters at the start of the query
     make up the recognised command (the window paints them in colour).
 
     mode is one of: "normal", "run", "kill", "help", "edit", "execute", "secret", "keep_secret", "quicklink", "snippets".
     """
+    query = normalize_query(query)
     text = query.lstrip()
     lead = len(query) - len(text)
     parts = split_prefix(query)
@@ -366,6 +436,7 @@ def _search(config: Config, query: str, limit: int | None = None, runner=default
     """
     limit = config.max_results if limit is None else limit
     options = dict(ignore_accents=config.ignore_accents, fuzzy=config.fuzzy, bonus=_bonus(config))
+    query = normalize_query(query)
     parts = split_prefix(query)
     word, rest = parts if parts else ("", "")
 
@@ -389,6 +460,12 @@ def _search(config: Config, query: str, limit: int | None = None, runner=default
         return help_search(config, f"{config.help_word} about {rest}".rstrip(), runner, **options)
     if parts and word in TOOL_WORDS:
         return [Match(i, SCORE_MODE) for i in tool_items(config, word, rest)]
+    if query.strip().lower() == "create_image":
+        return [Match(i, SCORE_MODE) for i in tool_items(config, "create_image", "")]
+    if query.strip().lower() == "news":
+        return [Match(i, SCORE_MODE) for i in tool_items(config, "news", "")]
+    if query.strip().lower() == "timer":  # alone: the timers that are counting down
+        return [Match(i, SCORE_MODE) for i in tool_items(config, "timer", "")]
 
     mode, _ = detect_mode(config, query)
 
@@ -555,11 +632,18 @@ def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.s
         notify_method=config.notify_method,
         clear_seconds=config.secret_clear_seconds,
         secret_notify_value=config.secret_notify_value,
+        timer_folder=config.timer_folder,
         timer_sound=config.timer_sound,
         timer_repeat=config.timer_repeat,
+        timer_volume=config.timer_volume,
+        timer_speak=config.timer_speak,
+        timer_system_volume=config.timer_system_volume,
         weather_location=config.weather_location,
         weather_format=config.weather_format,
         weather_timeout=config.weather_timeout,
+        news_feeds_file=str(config.news_feeds_file),
+        news_cache_folder=config.news_cache_folder,
+        news_timeout=config.news_timeout,
         aerospace=config.aerospace_enabled,
         aerospace_command=config.aerospace_command,
         aerospace_config=config.aerospace_config,
@@ -750,12 +834,27 @@ def cmd_about(args, config: Config, runner=default_runner, **_) -> int:
 def cmd_timer(args, config: Config, runner=default_runner, spawn=default_spawn, **_) -> int:
     """ml timer 90 | 5m | 1h30m | 1:30: start a timer; a notification and a sound when it ends."""
     text = " ".join(args.time)
+    if text.strip().lower() in ("list", "ls"):
+        found = mytimer.running(config.timer_folder, time.time())
+        for t in found:
+            print(f"{mytimer.clock(t['remaining'])}  {mytimer.format_duration(t['seconds'])} timer, rings at {time.strftime('%H:%M:%S', time.localtime(t['end']))}  (id {t['id']})")
+        print(f"{len(found)} timer(s) running" if found else "no timer is running", file=sys.stderr)
+        return 0
+    if text.strip().lower().startswith("cancel"):
+        wanted = text.split(None, 1)[1].strip() if " " in text.strip() else ""
+        found = mytimer.running(config.timer_folder, time.time())
+        chosen = [t for t in found if wanted in ("", "all", t["id"])]
+        for t in chosen:
+            mytimer.cancel(config.timer_folder, t["id"])
+        print(f"{len(chosen)} timer(s) cancelled")
+        return 0
     seconds = mytimer.parse_duration(text)
     if seconds is None:
         print(f"error: {text!r} is not a time. Try: 90, 90s, 5m, 1h30m, 1:30 (at most 24 h)", file=sys.stderr)
         return 2
     item = Item(id=f"timer:{seconds}", title="Timer", kind="timer", action="timer", target=str(seconds))
-    options = RunOptions(notify_method=config.notify_method, timer_sound=config.timer_sound, timer_repeat=config.timer_repeat, shell=config.execute_shell,
+    options = RunOptions(notify_method=config.notify_method, timer_folder=config.timer_folder, timer_sound=config.timer_sound, timer_repeat=config.timer_repeat, timer_volume=config.timer_volume, timer_speak=config.timer_speak,
+                         timer_system_volume=config.timer_system_volume, shell=config.execute_shell,
                          log_dir=config.execute_log_dir, spawn=spawn)
     result = ACTIONS["timer"](item, runner, args.dry_run, options)
     print(result.message)
@@ -805,6 +904,87 @@ def cmd_find_image(args, config: Config, spawn=default_spawn, sleep=time.sleep, 
             print(path)
         print(f"{len(found)} image(s) about {topic!r}", file=sys.stderr)
     return 0 if found else 1
+
+
+def cmd_copy_image_topic(args, config: Config, spawn=default_spawn, sleep=time.sleep, opener=None, **_) -> int:
+    """ml copy-image-topic FOLDER TOPIC DESTINATION: copy the images about TOPIC (see find-image) into DESTINATION."""
+    topic = " ".join(args.topic)
+    try:
+        done = myassistant.copy_images(config, args.folder, topic, args.destination, names_only=args.names_only, refresh=args.refresh, limit=args.limit,
+                                       dry_run=args.dry_run, opener=opener or myassistant.urllib.request.urlopen, spawn=spawn, sleep=sleep)
+    except (myassistant.AssistantError, ConfigError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        _print_json([{"from": str(s), "to": str(d), "status": st} for s, d, st in done])
+    else:
+        for source, target, status in done:
+            print(f"{status:<8} {source}  ->  {target}")
+        copied = sum(1 for *_x, st in done if st == "copied")
+        print(f"{len(done)} image(s) about {topic!r}: {copied} copied" + (" (dry run: nothing was copied)" if args.dry_run else ""), file=sys.stderr)
+    return 0 if done else 1
+
+
+def cmd_daily_briefing(args, config: Config, runner=default_runner, spawn=default_spawn, sleep=time.sleep, opener=None, **_) -> int:
+    """ml daily-briefing: calendar + inbox + to-do (gog and qmd), written as a briefing by the local model."""
+    return mybriefing.run(config, runner, raw=args.raw, save=args.save, opener=opener or myassistant.urllib.request.urlopen, spawn=spawn, sleep=sleep)
+
+
+def cmd_news(args, config: Config, fetcher=None, **_) -> int:
+    """ml news [CATEGORY] [words]: the newest headlines of your feeds (conf/feeds.json), cached for news.cache_minutes."""
+    try:
+        categories = mynews.load_feeds(config.news_feeds_file)
+        default = config.news_default if config.news_default in categories else sorted(categories)[0]
+        category, words = mynews.split_query(categories, default, " ".join(args.words))
+        if args.list:
+            for name in sorted(categories):
+                print(f"{name}: {len(categories[name])} feeds")
+            return 0
+        got = mynews.get(categories, category, config.news_cache_folder, config.news_cache_minutes, config.news_timeout, force=args.refresh, fetcher=fetcher or mynews.default_fetcher)
+    except mynews.NewsError as error:
+        print(f"ml news: {error}", file=sys.stderr)
+        return 1
+    days = args.days or config.news_days
+    chosen = mynews.select(got["entries"], words, days)
+    if args.limit:
+        chosen = chosen[: args.limit]
+    if got["failed"]:
+        print(f"({len(got['failed'])} feed(s) did not answer: {', '.join(mynews.source_name(u) for u in got['failed'])})", file=sys.stderr)
+    if args.json:
+        print(json.dumps({"category": category, "fetched_at": got["fetched_at"], "total_entries": len(chosen), "entries": chosen}, ensure_ascii=False, indent=2))
+        return 0 if chosen else 1
+    if not chosen:
+        print(f"No headline in {category!r} for the last {days} days" + (f" with {words!r}" if words else "") + ". Try --refresh or --days 30.", file=sys.stderr)
+        return 1
+    now = time.time()
+    for e in chosen:
+        print(f"{mynews.age(e['date'], now):>11}  {e['title']}\n{'':>13}{e['source']}  {e['url']}")
+        if args.summary and e["summary"]:
+            print(f"{'':>13}{e['summary']}")
+    return 0
+
+
+def cmd_create_image(args, config: Config, runner=default_runner, opener=None, **_) -> int:
+    """ml create-image PROMPT [FOLDER]: a picture from a prompt (Ollama image model or OpenRouter), saved in FOLDER."""
+    text = " ".join(args.words)
+    if args.folder:
+        text = f"{text} {args.folder}"
+    try:
+        paths, prompt, backend = myimage.generate(config, text, runner, opener or myimage.urllib.request.urlopen, backend=args.backend or "", model=args.model or "")
+    except myimage.ImageError as error:
+        print(f"ml create-image: {error}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"prompt": prompt, "backend": backend, "files": [str(p) for p in paths]}, ensure_ascii=False, indent=2))
+    else:
+        for path in paths:
+            print(path)
+    if config.create_image_open_after and not args.no_open and not args.json:
+        try:
+            runner(["open", str(paths[0])])
+        except FileNotFoundError:
+            pass
+    return 0
 
 
 def cmd_crash(args, config: Config, **_) -> int:
@@ -1093,7 +1273,7 @@ def make_parser() -> argparse.ArgumentParser:
     about = sub.add_parser("about", parents=[common], help="which mylauncher is this: version, files, Python, settings")
     about.set_defaults(func=cmd_about)
     timer_p = sub.add_parser("timer", parents=[common], help="a timer: notification and sound at the end (90, 5m, 1h30m, 1:30)")
-    timer_p.add_argument("time", nargs="+", help="for example 90, 5m, 1h30m, 1:30")
+    timer_p.add_argument("time", nargs="+", help="90, 5m, 1h30m, 1:30   |   list   |   cancel [all|ID]")
     timer_p.add_argument("--dry-run", action="store_true", help="show what would happen")
     timer_p.set_defaults(func=cmd_timer)
     for name, function, text in (("explain", cmd_explain, "explain a concept to a beginner (local model)"), ("deep-study", cmd_deep_study, "deep, intuitive understanding of a concept")):
@@ -1110,6 +1290,34 @@ def make_parser() -> argparse.ArgumentParser:
     find.add_argument("--refresh", action="store_true", help="forget what the model saw before and look at every picture again")
     find.add_argument("--limit", type=int, default=0, metavar="N", help="look at no more than N new pictures in this run (the next run continues)")
     find.set_defaults(func=cmd_find_image)
+    copy_topic = sub.add_parser("copy-image-topic", aliases=["copy_image_topic"], parents=[common], help="copy the images about a topic (see find-image) to a folder")
+    copy_topic.add_argument("folder", help="the folder to search (recursively)")
+    copy_topic.add_argument("topic", nargs="+", help="for example: religious")
+    copy_topic.add_argument("destination", help="where to copy the pictures (created if needed)")
+    copy_topic.add_argument("--names-only", action="store_true", help="no model: match only the file and folder names")
+    copy_topic.add_argument("--refresh", action="store_true", help="look at every picture again")
+    copy_topic.add_argument("--limit", type=int, default=0, metavar="N", help="look at no more than N new pictures in this run")
+    copy_topic.add_argument("--dry-run", action="store_true", help="say what would be copied, copy nothing")
+    copy_topic.set_defaults(func=cmd_copy_image_topic)
+    briefing_p = sub.add_parser("daily-briefing", aliases=["daily_briefing", "briefing"], parents=[common], help="your day from gog (calendar, mail) and qmd (to-do), written by the local model")
+    briefing_p.add_argument("--raw", action="store_true", help="no model: print what gog and qmd answered")
+    briefing_p.add_argument("--save", action="store_true", help="also save the briefing as DATE-briefing.md (in briefing.save_folder, or here)")
+    briefing_p.set_defaults(func=cmd_daily_briefing)
+    news_p = sub.add_parser("news", parents=[common], help="the newest headlines of your RSS feeds (conf/feeds.json)")
+    news_p.add_argument("words", nargs="*", help="a category (news, games, finance, ...) and/or words that must appear in the headline")
+    news_p.add_argument("--refresh", action="store_true", help="fetch the feeds now, whatever the cache says")
+    news_p.add_argument("--limit", type=int, default=20, metavar="N", help="at most N headlines (default 20; 0 = all)")
+    news_p.add_argument("--days", type=int, default=0, metavar="N", help="only the last N days (default: news.days)")
+    news_p.add_argument("--summary", action="store_true", help="also print each summary")
+    news_p.add_argument("--list", action="store_true", help="list the categories")
+    news_p.set_defaults(func=cmd_news)
+    image_p = sub.add_parser("create-image", aliases=["create_image"], parents=[common], help="make a picture from a prompt (Ollama image model or OpenRouter)")
+    image_p.add_argument("words", nargs="+", help="the prompt; a last word starting with / or ~ is the folder")
+    image_p.add_argument("--folder", default="", help="where to save it (default: create_image.folder)")
+    image_p.add_argument("--backend", choices=["ollama", "openrouter"], default="", help="override create_image.backend")
+    image_p.add_argument("--model", default="", help="override the model of the backend")
+    image_p.add_argument("--no-open", action="store_true", help="do not open the picture afterwards")
+    image_p.set_defaults(func=cmd_create_image)
     crash = sub.add_parser("crash", parents=[common], help="summarise the newest \"Python quit unexpectedly\" report")
     crash.set_defaults(func=cmd_crash)
     secret_notes = sub.add_parser("secret-notes", parents=[common], help="write the private_notes (many lines) of a secret")
