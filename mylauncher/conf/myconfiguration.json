@@ -201,6 +201,33 @@
       "confirm": false,
       "icon": "📋",
       "description": "Calendar + inbox + to-do, written by the local model  ·  ml daily-briefing"
+    },
+    {
+      "id": "daily_gospel",
+      "title": "daily gospel",
+      "action": "daily_gospel",
+      "keywords": [
+        "daily_gospel",
+        "gospel",
+        "evangelio",
+        "reading"
+      ],
+      "confirm": false,
+      "icon": "📖",
+      "description": "Today's Gospel (Evangelizo)  ·  ml daily-gospel"
+    },
+    {
+      "id": "daily_gospel_image",
+      "title": "daily gospel image",
+      "action": "daily_gospel_image",
+      "keywords": [
+        "daily_gospel_image",
+        "gospel image",
+        "gospel picture"
+      ],
+      "confirm": false,
+      "icon": "🕊️",
+      "description": "Prompt from today's Gospel + three pictures  ·  ml daily-gospel-image"
     }
   ],
   "notifications": {
@@ -238,7 +265,8 @@
     "timeout_seconds": 600,
     "autostart": true,
     "prompts_file": "prompts.json",
-    "cache_file": "~/Library/Caches/mylauncher/image-captions.json"
+    "cache_file": "~/Library/Caches/mylauncher/image-captions.json",
+    "readme_file": "README.md"
   },
   "timer": {
     "sound": "/System/Library/Sounds/Hero.aiff",
@@ -283,13 +311,36 @@
     "cache_folder": "~/Library/Caches/mylauncher"
   },
   "create_image": {
-    "backend": "ollama",
+    "backend": "mflux",
     "ollama_model": "x/z-image-turbo",
     "openrouter_model": "bytedance-seed/seedream-4.5",
     "folder": "~/Pictures/mylauncher",
-    "timeout_seconds": 180,
+    "timeout_seconds": 1800,
     "open_after": true,
     "keychain_service": "justtothepoint-toolkit",
-    "keychain_user": "OPENROUTER_API_KEY"
+    "keychain_user": "OPENROUTER_API_KEY",
+    "mflux_command": "~/macOS/myPython/.venv/bin/mflux-generate-flux2",
+    "mflux_args": [
+      "--model",
+      "flux2-klein-base-9b",
+      "--quantize",
+      "8",
+      "--low-ram",
+      "--steps",
+      "50",
+      "--guidance",
+      "3.5",
+      "--width",
+      "1920",
+      "--height",
+      "1088"
+    ],
+    "crop_size": "1920x1080"
+  },
+  "gospel": {
+    "feed_url": "https://rss.evangelizo.org/rss/v2/evangelizo_rss-am.xml",
+    "timeout_seconds": 20,
+    "image_count": 3,
+    "image_folder": "~/Pictures/daily-gospel"
   }
 }

@@ -302,7 +302,7 @@ class FindImage(CliCase):
 
     def setUp(self):
         super().setUp()
-        cfg = support.good_config([self.tmp / "Applications"], ollama={"cache_file": str(self.tmp / "cache.json")})
+        cfg = support.good_config([self.tmp / "Applications"], ollama={"readme_file": "README.md"})
         path = self.write_config(cfg)
         prompts = json.loads((Path(__file__).resolve().parent.parent / "conf" / "prompts.json").read_text())
         (path.parent / "prompts.json").write_text(json.dumps(prompts))
@@ -354,7 +354,8 @@ class FindImage(CliCase):
         import os
         target = self.pics / "images" / "volcano.png"
         target.write_bytes(b"bb")
-        os.utime(target, (1, 1))
+        import time as _t
+        os.utime(target, (_t.time() + 100, _t.time() + 100))  # modified AFTER the date of the README
         self.call("find-image", str(self.pics), "religious", opener=self.fake())
         self.assertEqual(self.captions, before + 1)
 

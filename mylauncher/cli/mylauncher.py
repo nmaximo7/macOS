@@ -59,6 +59,7 @@ import myversion
 import mytimer
 import mynews
 import myimage
+import mygospel
 import myassistant
 import mybriefing
 from myhelp import TOPICS, help_end, help_search
@@ -306,7 +307,7 @@ def tool_items(config: Config, word: str, rest: str) -> list:
             return [Item(id="info:create_image", title="Create image: what should it show?", kind="prefix", action="prefix_hint", complete="create image ",
                          subtitle="create image a red fox in the snow [FOLDER]   (folder = last word starting with / or ~)", icon="🎨", badge="Image")]
         return [Item(id="ai:create_image", title=f"Create image: {prompt}", kind="ai", action="execute_terminal", target=_ml_command("create-image", "--", rest.strip()),
-                     complete=f"create image {rest.strip()}", subtitle=f"{config.create_image_backend}: {config.create_image_ollama_model if config.create_image_backend == 'ollama' else config.create_image_openrouter_model}  →  {folder}",
+                     complete=f"create image {rest.strip()}", subtitle=f"{config.create_image_backend}: { {'mflux': Path(config.create_image_mflux_command).name, 'ollama': config.create_image_ollama_model}.get(config.create_image_backend, config.create_image_openrouter_model) }  →  {folder}",
                      icon="🎨", badge="Image")]
     if word == "copy_image_topic":
         parts = [p.strip() for p in rest.split("|")]
@@ -861,8 +862,8 @@ def cmd_timer(args, config: Config, runner=default_runner, spawn=default_spawn, 
     return 0 if result.ok else 1
 
 
-def _cmd_ai(kind: str, text: str, config: Config, spawn, sleep, opener, **_) -> int:
-    return myassistant.ask(config, kind, text, opener=opener or myassistant.urllib.request.urlopen, spawn=spawn, sleep=sleep)
+def _cmd_ai(kind: str, text: str, config: Config, spawn, sleep, opener, refresh: bool = False, **_) -> int:
+    return myassistant.ask(config, kind, text, opener=opener or myassistant.urllib.request.urlopen, spawn=spawn, sleep=sleep, refresh=refresh)
 
 
 def cmd_explain(args, config: Config, spawn=default_spawn, sleep=time.sleep, opener=None, **_) -> int:
@@ -885,7 +886,7 @@ def cmd_describe_image(args, config: Config, spawn=default_spawn, sleep=time.sle
             print(f"error: no image given and none found in {folder}", file=sys.stderr)
             return 1
         path = str(found)
-    return _cmd_ai("describe_image", path, config, spawn, sleep, opener)
+    return _cmd_ai("describe_image", path, config, spawn, sleep, opener, refresh=args.refresh)
 
 
 def cmd_find_image(args, config: Config, spawn=default_spawn, sleep=time.sleep, opener=None, **_) -> int:
@@ -965,7 +966,12 @@ def cmd_news(args, config: Config, fetcher=None, **_) -> int:
 
 
 def cmd_create_image(args, config: Config, runner=default_runner, opener=None, **_) -> int:
-    """ml create-image PROMPT [FOLDER]: a picture from a prompt (Ollama image model or OpenRouter), saved in FOLDER."""
+    """ml create-image PROMPT [FOLDER]: a picture from a prompt (mflux, Ollama or OpenRouter), saved in FOLDER."""
+    if runner is default_runner:  # in a terminal: let the model's progress bar show (the output is not captured)
+        def runner(command, input_text=None, _real=default_runner):
+            if command and command[0] in ("security", "open"):
+                return _real(command, input_text)
+            return subprocess.run(command, check=False)
     text = " ".join(args.words)
     if args.folder:
         text = f"{text} {args.folder}"
@@ -984,6 +990,47 @@ def cmd_create_image(args, config: Config, runner=default_runner, opener=None, *
             runner(["open", str(paths[0])])
         except FileNotFoundError:
             pass
+    return 0
+
+
+def cmd_daily_gospel(args, config: Config, **_) -> int:
+    """ml daily-gospel: today's Gospel from the Evangelizo feed (--json: title, date, reading, link)."""
+    try:
+        gospel = mygospel.get_gospel(config, args.fetcher if hasattr(args, "fetcher") and args.fetcher else mygospel.fetch)
+    except mygospel.GospelError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(gospel, ensure_ascii=False, indent=2))
+    else:
+        mygospel.show(gospel)
+    return 0
+
+
+def cmd_daily_gospel_image(args, config: Config, runner=default_runner, spawn=default_spawn, sleep=time.sleep, opener=None, fetcher=None, **_) -> int:
+    """ml daily-gospel-image: the Gospel -> an image prompt written by Ollama -> three pictures (create image)."""
+    if runner is default_runner:  # in a terminal: show the progress of the image model
+        real = default_runner
+
+        def runner(command, input_text=None):
+            return real(command, input_text) if command and command[0] in ("security", "open", "sips") else subprocess.run(command, check=False)
+    try:
+        gospel = mygospel.get_gospel(config, fetcher or mygospel.fetch)
+        prompt, paths = mygospel.make_images(config, gospel, runner, opener=opener or myassistant.urllib.request.urlopen, spawn=spawn, sleep=sleep,
+                                             count=args.count, folder=args.folder, prompt_only=args.prompt_only, backend=args.backend or "")
+    except (mygospel.GospelError, myimage.ImageError, myassistant.AssistantError, ConfigError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"title": gospel["title"], "prompt": prompt, "files": [str(p) for p in paths]}, ensure_ascii=False, indent=2))
+    else:
+        for path in paths:
+            print(path)
+        if not args.prompt_only and not args.no_open and config.create_image_open_after and paths:
+            try:
+                runner(["open", str(paths[0].parent)])
+            except FileNotFoundError:
+                pass
     return 0
 
 
@@ -1282,6 +1329,7 @@ def make_parser() -> argparse.ArgumentParser:
         ai.set_defaults(func=function)
     describe = sub.add_parser("describe-image", parents=[common], help="describe an image in detail (no file: the newest screenshot)")
     describe.add_argument("file", nargs="*", help="a png/jpg file")
+    describe.add_argument("--refresh", action="store_true", help="ask the model again even if the README of the folder already has a description")
     describe.set_defaults(func=cmd_describe_image)
     find = sub.add_parser("find-image", aliases=["find_image"], parents=[common], help="the images below a folder that are about a topic")
     find.add_argument("folder", help="the folder to search (recursively)")
@@ -1314,10 +1362,19 @@ def make_parser() -> argparse.ArgumentParser:
     image_p = sub.add_parser("create-image", aliases=["create_image"], parents=[common], help="make a picture from a prompt (Ollama image model or OpenRouter)")
     image_p.add_argument("words", nargs="+", help="the prompt; a last word starting with / or ~ is the folder")
     image_p.add_argument("--folder", default="", help="where to save it (default: create_image.folder)")
-    image_p.add_argument("--backend", choices=["ollama", "openrouter"], default="", help="override create_image.backend")
+    image_p.add_argument("--backend", choices=["mflux", "ollama", "openrouter"], default="", help="override create_image.backend")
     image_p.add_argument("--model", default="", help="override the model of the backend")
     image_p.add_argument("--no-open", action="store_true", help="do not open the picture afterwards")
     image_p.set_defaults(func=cmd_create_image)
+    gospel_p = sub.add_parser("daily-gospel", aliases=["daily_gospel"], parents=[common], help="today's Gospel reading (Evangelizo feed): title, date, reading, link")
+    gospel_p.set_defaults(func=cmd_daily_gospel)
+    gimage_p = sub.add_parser("daily-gospel-image", aliases=["daily_gospel_image"], parents=[common], help="an image prompt from today's Gospel (Ollama), then pictures of it (create image)")
+    gimage_p.add_argument("--count", type=int, default=0, metavar="N", help="how many pictures (default: gospel.image_count)")
+    gimage_p.add_argument("--folder", default="", help="where to save them (default: gospel.image_folder)")
+    gimage_p.add_argument("--backend", choices=["mflux", "ollama", "openrouter"], default="", help="override create_image.backend")
+    gimage_p.add_argument("--prompt-only", action="store_true", help="only write the prompt (no pictures)")
+    gimage_p.add_argument("--no-open", action="store_true", help="do not open the folder afterwards")
+    gimage_p.set_defaults(func=cmd_daily_gospel_image)
     crash = sub.add_parser("crash", parents=[common], help="summarise the newest \"Python quit unexpectedly\" report")
     crash.set_defaults(func=cmd_crash)
     secret_notes = sub.add_parser("secret-notes", parents=[common], help="write the private_notes (many lines) of a secret")

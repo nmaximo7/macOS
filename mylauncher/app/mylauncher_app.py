@@ -46,6 +46,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mylauncher_app", description="mylauncher window and hotkey")
     parser.add_argument("--config", metavar="FILE", help="configuration file")
     parser.add_argument("--show", action="store_true", help="show the window right away")
+    parser.add_argument("--keep-old", action="store_true", help="if another copy is running, end THIS one (the default: the newest copy stops the old ones and takes over)")
     parser.add_argument("--toast-test", action="store_true", help="show the toast for 3 seconds, with the window hidden, and exit")
     parser.add_argument("--timer-test", action="store_true", help="a 6 second timer: big clock, then confetti, and exit")
     parser.add_argument("--hotkey-test", action="store_true", help="only print a line when the hotkey is pressed")
@@ -134,7 +135,7 @@ def hotkey_test(config) -> int:
     return 0
 
 
-def run(config, config_path, show: bool) -> int:
+def run(config, config_path, show: bool, keep_old: bool = False) -> int:
     try:
         import tkinter as tk
     except ImportError:
@@ -144,11 +145,31 @@ def run(config, config_path, show: bool) -> int:
 
     import myinstance
 
-    lock, other = myinstance.acquire(config.usage_file.parent / "app.lock")
-    if lock is None:
-        print(f"mylauncher is already running (pid {other}); this second copy ends. To restart it: mlauto restart", flush=True)
+    lock_path = config.usage_file.parent / "app.lock"
+    lock, other = myinstance.acquire(lock_path)
+    if keep_old and lock is None:
+        print(f"mylauncher is already running (pid {other}); this second copy ends (--keep-old).", flush=True)
         return 0
+    if not keep_old:  # the NEWEST copy wins: stop every old one (also the ones that do not hold the lock any more)
+        if lock is not None:
+            lock.close()  # (acquire wrote our pid; we take it again after the old copies are gone)
+        stopped, forced = myinstance.stop_old_instances()
+        if stopped:
+            print(f"[app] stopped {len(stopped)} old copy(ies) of mylauncher: {stopped}" + (f" (SIGKILL for {forced})" if forced else ""), flush=True)
+        for _ in range(20):
+            lock, other = myinstance.acquire(lock_path)
+            if lock is not None:
+                break
+            time.sleep(0.25)
+        if lock is None:
+            print(f"mylauncher: could not take over from pid {other}; this copy ends. Try: pkill -f mylauncher_app.py", flush=True)
+            return 1
 
+    def quit_now(signum, frame):  # `kill`, a newer copy of the launcher, launchd at shutdown: leave at once and CLEANLY (exit 0: launchd does not restart it)
+        print(f"[app] signal {signum}: leaving", flush=True)
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, quit_now)  # runs at the next 1-second tick at the latest
     print(f"python: {sys.executable}", flush=True)  # these lines go to the log file when started at login
     print_permissions()
     root = tk.Tk()
@@ -332,7 +353,7 @@ def main(argv=None) -> int:
         return toast_test(config)
     if args.timer_test:
         return timer_test(config)
-    return hotkey_test(config) if args.hotkey_test else run(config, config_path, args.show)
+    return hotkey_test(config) if args.hotkey_test else run(config, config_path, args.show, args.keep_old)
 
 
 if __name__ == "__main__":

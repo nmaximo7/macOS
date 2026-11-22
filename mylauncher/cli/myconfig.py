@@ -158,6 +158,7 @@ class Config:
     ollama_host: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen3.8:27b"
     ollama_vision_model: str = ""  # describe_image: "" = the same model
+    ollama_readme: str = "README.md"  # image tools: the file in the scanned folder where the descriptions are kept
     ollama_cache: str = "~/Library/Caches/mylauncher/image-captions.json"  # find_image: what the model saw in each picture
     ollama_think: object = None  # True / False / None (None = do not send the option)
     ollama_keep_alive: str = ""  # e.g. "10m": how long the model stays in memory
@@ -176,7 +177,14 @@ class Config:
     timer_big_clock: bool = True
     timer_confetti: bool = True
     timer_big_clock_seconds: int = 30
-    create_image_backend: str = "ollama"
+    gospel_feed_url: str = "https://rss.evangelizo.org/rss/v2/evangelizo_rss-am.xml"
+    gospel_timeout: int = 20
+    gospel_image_count: int = 3
+    gospel_image_folder: str = "~/Pictures/daily-gospel"
+    create_image_backend: str = "mflux"
+    create_image_mflux_command: str = "~/macOS/myPython/.venv/bin/mflux-generate-flux2"
+    create_image_mflux_args: tuple = ("--model", "flux2-klein-base-9b", "--quantize", "8", "--low-ram", "--steps", "50", "--guidance", "3.5", "--width", "1920", "--height", "1088")
+    create_image_crop_size: str = "1920x1080"
     create_image_ollama_model: str = "x/z-image-turbo"
     create_image_openrouter_model: str = "bytedance-seed/seedream-4.5"
     create_image_folder: str = "~/Pictures/mylauncher"
@@ -364,6 +372,9 @@ def parse_config(data, path: Path) -> Config:
     ollama_prompts = Path(_check(ollama_section.get("prompts_file", "prompts.json"), str, "ollama.prompts_file")).expanduser()
     if not ollama_prompts.is_absolute():
         ollama_prompts = Path(path).parent / ollama_prompts
+    ollama_readme = _check(ollama_section.get("readme_file", "README.md"), str, "ollama.readme_file").strip() or "README.md"
+    if "/" in ollama_readme:
+        raise ConfigError("ollama.readme_file is a file NAME (README.md), not a path: it lives in the folder that is scanned")
     ollama_cache = _check(ollama_section.get("cache_file", "~/Library/Caches/mylauncher/image-captions.json"), str, "ollama.cache_file").strip()
     timer_section = _check(data.get("timer", {}), dict, "timer")
     timer_folder = _check(timer_section.get("folder", "~/.config/mylauncher/timers"), str, "timer.folder").strip() or "~/.config/mylauncher/timers"
@@ -393,12 +404,26 @@ def parse_config(data, path: Path) -> Config:
     if timer_big_clock_seconds < 1:
         raise ConfigError("timer.big_clock_seconds must be 1 or more (the big clock appears when this many seconds are left)")
     ci = _check(data.get("create_image", {}), dict, "create_image")
-    ci_backend = _check(ci.get("backend", "ollama"), str, "create_image.backend").strip().lower()
-    if ci_backend not in ("ollama", "openrouter"):
-        raise ConfigError("create_image.backend must be \"ollama\" or \"openrouter\"")
+    ci_backend = _check(ci.get("backend", "mflux"), str, "create_image.backend").strip().lower()
+    if ci_backend not in ("mflux", "ollama", "openrouter"):
+        raise ConfigError("create_image.backend must be \"mflux\" (local, free), \"ollama\" or \"openrouter\" (paid)")
+    _crop = _check(ci.get("crop_size", "1920x1080"), str, "create_image.crop_size").strip().lower()
+    if _crop and not re.fullmatch(r"\d{2,5}x\d{2,5}", _crop):
+        raise ConfigError("create_image.crop_size is WIDTHxHEIGHT, for example 1920x1080 (empty = no cut)")
+    ci_args = ci.get("mflux_args", ["--model", "flux2-klein-base-9b", "--quantize", "8", "--low-ram", "--steps", "50", "--guidance", "3.5", "--width", "1920", "--height", "1088"])
+    if not isinstance(ci_args, list) or not all(isinstance(a, (str, int, float)) and not isinstance(a, bool) for a in ci_args):
+        raise ConfigError("create_image.mflux_args must be a list of words, e.g. [\"--steps\", \"9\"]")
     ci_timeout = _check(ci.get("timeout_seconds", 180), int, "create_image.timeout_seconds")
     if ci_timeout < 5:
         raise ConfigError("create_image.timeout_seconds must be 5 or more")
+    gs = _check(data.get("gospel", {}), dict, "gospel")
+    gospel_url = _check(gs.get("feed_url", "https://rss.evangelizo.org/rss/v2/evangelizo_rss-am.xml"), str, "gospel.feed_url").strip()
+    if not gospel_url.startswith(("http://", "https://")):
+        raise ConfigError("gospel.feed_url must be an http(s) address")
+    gospel_timeout = _check(gs.get("timeout_seconds", 20), int, "gospel.timeout_seconds")
+    gospel_count = _check(gs.get("image_count", 3), int, "gospel.image_count")
+    if gospel_timeout < 1 or not 1 <= gospel_count <= 12:
+        raise ConfigError("gospel: timeout_seconds >= 1 and image_count between 1 and 12")
     news_section = _check(data.get("news", {}), dict, "news")
     news_feeds = Path(_check(news_section.get("feeds_file", "feeds.json"), str, "news.feeds_file")).expanduser()
     if not news_feeds.is_absolute():
@@ -645,6 +670,7 @@ def parse_config(data, path: Path) -> Config:
         ollama_model=ollama_model,
         ollama_vision_model=ollama_vision,
         ollama_think=ollama_think,
+        ollama_readme=ollama_readme,
         ollama_cache=ollama_cache,
         ollama_keep_alive=_check(ollama_section.get("keep_alive", ""), str, "ollama.keep_alive").strip(),
         ollama_timeout=ollama_timeout,
@@ -662,7 +688,14 @@ def parse_config(data, path: Path) -> Config:
         timer_big_clock=timer_big_clock,
         timer_confetti=timer_confetti,
         timer_big_clock_seconds=timer_big_clock_seconds,
+        gospel_feed_url=gospel_url,
+        gospel_timeout=gospel_timeout,
+        gospel_image_count=gospel_count,
+        gospel_image_folder=_check(gs.get("image_folder", "~/Pictures/daily-gospel"), str, "gospel.image_folder").strip() or "~/Pictures/daily-gospel",
         create_image_backend=ci_backend,
+        create_image_mflux_command=_check(ci.get("mflux_command", "~/macOS/myPython/.venv/bin/mflux-generate-flux2"), str, "create_image.mflux_command").strip(),
+        create_image_mflux_args=tuple(str(a) for a in ci_args),
+        create_image_crop_size=_crop,
         create_image_ollama_model=_check(ci.get("ollama_model", "x/z-image-turbo"), str, "create_image.ollama_model").strip(),
         create_image_openrouter_model=_check(ci.get("openrouter_model", "bytedance-seed/seedream-4.5"), str, "create_image.openrouter_model").strip(),
         create_image_folder=_check(ci.get("folder", "~/Pictures/mylauncher"), str, "create_image.folder").strip() or "~/Pictures/mylauncher",

@@ -43,7 +43,7 @@ from mykill import alive, applescript_quote, running_apps
 from mytypes import Item
 
 # Actions that a "command" in the configuration file may use. (Apps always use open_app.)
-COMMAND_ACTIONS = ("shutdown", "reboot", "screenshot_full", "screenshot_region", "weather", "briefing")
+COMMAND_ACTIONS = ("shutdown", "reboot", "screenshot_full", "screenshot_region", "weather", "briefing", "daily_gospel", "daily_gospel_image")
 
 
 @dataclass
@@ -324,6 +324,16 @@ def ml_command(*words) -> str:
 def briefing(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
     """`daily briefing` (a command row): open a terminal that runs  ml daily-briefing."""
     return execute_terminal(Item(id=item.id, title="daily briefing", kind="ai", action="execute_terminal", target=ml_command("daily-briefing")), runner, dry_run, options)
+
+
+def daily_gospel(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """`daily_gospel` (a command row): open a terminal that runs  ml daily-gospel."""
+    return execute_terminal(Item(id=item.id, title="daily gospel", kind="ai", action="execute_terminal", target=ml_command("daily-gospel")), runner, dry_run, options)
+
+
+def daily_gospel_image(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """`daily_gospel_image` (a command row): open a terminal that runs  ml daily-gospel-image (a prompt, then three pictures)."""
+    return execute_terminal(Item(id=item.id, title="daily gospel image", kind="ai", action="execute_terminal", target=ml_command("daily-gospel-image")), runner, dry_run, options)
 
 
 def timer(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
@@ -646,6 +656,8 @@ ACTIONS = {
     "timer": timer,
     "timer_cancel": timer_cancel,
     "briefing": briefing,
+    "daily_gospel": daily_gospel,
+    "daily_gospel_image": daily_gospel_image,
     "news_refresh": news_refresh,
     "screenshot_full": screenshot_full,
     "screenshot_region": screenshot_region,

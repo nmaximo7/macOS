@@ -168,7 +168,7 @@ def generate(config, body: dict, out, opener=urllib.request.urlopen, spawn=None,
         return stream(config, body, out, opener)
 
 
-def ask(config, kind: str, text: str, prompts_path=None, out=None, opener=urllib.request.urlopen, spawn=None, sleep=time.sleep) -> int:
+def ask(config, kind: str, text: str, prompts_path=None, out=None, opener=urllib.request.urlopen, spawn=None, sleep=time.sleep, refresh: bool = False) -> int:
     """The whole job of `explain` / `deep_study` / `describe_image`. Returns an exit code."""
     out = out or sys.stdout
     try:
@@ -177,7 +177,12 @@ def ask(config, kind: str, text: str, prompts_path=None, out=None, opener=urllib
         if kind == "describe_image":
             images, model = (read_image(text),), config.ollama_vision_model
             prompt = build_prompt(prompts, kind)
-            shown = Path(text.strip().strip("'\"")).expanduser().name
+            file = Path(text.strip().strip("'\"")).expanduser().absolute()
+            shown = file.name
+            updated, readme_model, entries = (None, "", {}) if refresh else myreadme.read(file.parent, config.ollama_readme)
+            if readme_model == (config.ollama_vision_model or config.ollama_model) and myreadme.is_fresh(file, file.name, updated, entries):
+                print(f"🖼️ {shown}   (from {config.ollama_readme} of its folder, written {time.strftime(myreadme.STAMP, time.localtime(updated))}; --refresh asks the model again)\n\n{entries[file.name]}", file=out, flush=True)
+                return 0
         else:
             if not text.strip():
                 raise AssistantError("say what to explain, for example:  ml explain 'quantum entanglement'")
@@ -185,8 +190,14 @@ def ask(config, kind: str, text: str, prompts_path=None, out=None, opener=urllib
         body = payload(config, prompt, images, model)
         print(f"🧠 {kind}: {shown}   (model {body['model']})\n", file=out, flush=True)
         started = time.time()
-        generate(config, body, out, opener, spawn, sleep)
+        answer = generate(config, body, out, opener, spawn, sleep)
         print(f"\n\n— {time.time() - started:.0f} s", file=out, flush=True)
+        if kind == "describe_image" and answer and answer.strip():  # remember it in the README of the picture's folder
+            _updated, _m, entries = myreadme.read(file.parent, config.ollama_readme)
+            entries[file.name] = myreadme.one_line(answer)
+            kept = {k: v for k, v in entries.items() if (file.parent / k).exists()}
+            path = myreadme.write(file.parent, config.ollama_readme, kept, config.ollama_vision_model or config.ollama_model, time.time())
+            print(f"(saved in {path})", file=out, flush=True)
         return 0
     except (AssistantError, ConfigError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -205,6 +216,7 @@ def ask(config, kind: str, text: str, prompts_path=None, out=None, opener=urllib
 
 import contextlib
 import io
+import myreadme
 import os
 import re
 
@@ -287,28 +299,40 @@ def find_images(config, folder, topic: str, prompts_path=None, names_only=False,
         if needed not in prompts:
             raise AssistantError(f"the prompts file has no {needed!r} entry (see conf/prompts.json of this version)")
     model = config.ollama_vision_model or config.ollama_model
-    cache_path = Path(config.ollama_cache).expanduser()
-    cache = {} if refresh else load_cache(cache_path)
-    todo = [i for i in images if cache_key(i, model) not in cache]
+    readme = config.ollama_readme
+    updated, readme_model, entries = (None, "", {}) if refresh else myreadme.read(root, readme)
+    if readme_model and readme_model != model:  # another model wrote them: look again
+        updated, entries = None, {}
+    names = {i: str(i.relative_to(root)) for i in images}
+    todo = [i for i in images if not myreadme.is_fresh(i, names[i], updated, entries)]
     if limit:
         todo = todo[:limit]
-    print(f"{len(images)} image(s) in {root}: {len(images) - len([i for i in images if cache_key(i, model) not in cache])} already known, {len(todo)} to look at (model {model})", file=err, flush=True)
+    complete = not limit
+    print(f"{len(images)} image(s) in {root}: {len(images) - len([i for i in images if not myreadme.is_fresh(i, names[i], updated, entries)])} already in {readme}, {len(todo)} to look at (model {model})", file=err, flush=True)
+
+    def save(finished: bool) -> None:
+        # the date moves on only after a COMPLETE run: an interrupted run must not hide a picture that changed
+        stamp = time.time() if (finished or updated is None) else updated
+        myreadme.write(root, readme, {names[i]: entries[names[i]] for i in images if names[i] in entries}, model, stamp)
+
     try:
         for number, image in enumerate(todo, 1):
-            print(f"  [{number}/{len(todo)}] {image.relative_to(root)}", file=err, flush=True)
+            print(f"  [{number}/{len(todo)}] {names[image]}", file=err, flush=True)
             try:
                 body = payload(config, prompts["caption_image"], (read_image(image),), config.ollama_vision_model)
-                cache[cache_key(image, model)] = quiet_generate(config, body, opener, spawn, sleep, err)
+                entries[names[image]] = myreadme.one_line(quiet_generate(config, body, opener, spawn, sleep, err))
             except AssistantError as exc:
                 if "no image" in str(exc) or "Ollama reads" in str(exc):
                     print(f"    skipped: {exc}", file=err, flush=True)
                     continue
                 raise
             if number % 5 == 0:
-                save_cache(cache_path, cache)
-    finally:
-        save_cache(cache_path, cache)  # also after Ctrl-C or an error: what was learned is kept
-    known = [(i, cache[cache_key(i, model)]) for i in images if cache_key(i, model) in cache]
+                save(False)
+        save(complete)
+    except BaseException:
+        save(False)  # Ctrl-C or an error: what was learned is kept
+        raise
+    known = [(i, entries[names[i]]) for i in images if names[i] in entries]
     chosen = []
     for start in range(0, len(known), chunk):
         part = known[start : start + chunk]

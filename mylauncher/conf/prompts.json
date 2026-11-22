@@ -19,8 +19,8 @@
     "Distinguish clearly between what is visible and what you're inferring, and don't guess at identities or details that can't be determined from the image."
   ],
   "caption_image": [
-    "Describe this image in two or three sentences: the main subject, the setting, what is happening, and the mood.",
-    "Then add one line starting with 'Keywords:' with ten words or short phrases (subjects, themes, symbols, places) someone might search for.",
+    "Describe this image in detail, in one paragraph of five to eight sentences: the main subject, the setting, the people or objects and what they do, the composition, light, colours and mood.",
+    "Then add one line starting with 'Keywords:' with twelve words or short phrases (subjects, themes, symbols, places) someone might search for.",
     "Say only what is visible; do not guess identities."
   ],
   "find_image": [
@@ -48,5 +48,14 @@
     "",
     "## To-do file",
     "{todo}"
+  ],
+  "gospel_image": [
+    "Below is today's Gospel reading ({title}).",
+    "Write ONE prompt for an AI image generator that shows its core scene, imagery or theme.",
+    "The prompt must be descriptive, cinematic and reverent: name the setting (place, time of day, weather), the figures and what they do, their clothing, the light, the colours, the composition (for example 'wide cinematic shot, 16:9') and the mood, in realistic ancient Palestine, with natural textures.",
+    "Do not show text, letters or captions in the picture. Use one paragraph of 80 to 140 words. Answer with the prompt only: no title, no quotes, no explanation.",
+    "",
+    "Reading:",
+    "{reading}"
   ]
 }
