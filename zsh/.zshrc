@@ -40,7 +40,7 @@ if [[ -z $HOMEBREW_PREFIX ]]; then
 fi
 
 # Your own scripts first. This is a good place to put aliases and functions.
-path=("$HOME/bin" "$HOME/.local/bin" $path)
+path=("$HOME/bin" "$HOME/macOS/scripts" "$HOME/macOS/mylauncher/cli" "$HOME/.local/bin" $path)
 
 
 # =============================================================================

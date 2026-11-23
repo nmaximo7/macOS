@@ -60,6 +60,7 @@ import mytimer
 import mynews
 import myimage
 import mygospel
+import myprayer
 import myassistant
 import mybriefing
 from myhelp import TOPICS, help_end, help_search
@@ -643,6 +644,8 @@ def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.s
         weather_format=config.weather_format,
         weather_timeout=config.weather_timeout,
         news_feeds_file=str(config.news_feeds_file),
+        gospel_folder=config.gospel_image_folder,
+        gospel_image_count=config.gospel_image_count,
         news_cache_folder=config.news_cache_folder,
         news_timeout=config.news_timeout,
         aerospace=config.aerospace_enabled,
@@ -993,40 +996,120 @@ def cmd_create_image(args, config: Config, runner=default_runner, opener=None, *
     return 0
 
 
-def cmd_daily_gospel(args, config: Config, **_) -> int:
-    """ml daily-gospel: today's Gospel from the Evangelizo feed (--json: title, date, reading, link)."""
+def _live_runner(runner):
+    """In a terminal let the image model's progress show; small helper programs keep their captured output."""
+    if runner is not default_runner:
+        return runner
+    real = default_runner
+
+    # macOS prints "can't turn off malloc stack logging" from every Python child when this variable is set in the environment: do not pass it on
+    clean_env = {k: v for k, v in os.environ.items() if not k.startswith("MallocStackLogging")}
+
+    def live(command, input_text=None):
+        return real(command, input_text) if command and command[0] in ("security", "open", "sips") else subprocess.run(command, check=False, env=clean_env)
+    return live
+
+
+def cmd_daily_gospel(args, config: Config, runner=default_runner, spawn=default_spawn, sleep=time.sleep, opener=None, fetcher=None, today=None, **_) -> int:
+    """ml daily-gospel: EVERYTHING for today's Gospel, once a day.
+
+    The guided prayer (date + saint, opening prayer, reading, reflection, Lord's Prayer, closing prayer) and the pictures, saved in
+    gospel.image_folder as  DATE-gospel-prayer.md  (the result),  DATE-gospel.json  (all the data)  and  DATE-gospel-prayer.html  (the page
+    that the launcher opens). If they are already there for today nothing is made again (--refresh makes them again); if only the pictures
+    are missing, only they are made. The files are written after the prayer and again after the pictures: an interrupted run keeps the prayer.
+    --plain: only the feed's reading (no model, no files). --no-images: no pictures. --json: print the JSON. --open: open the page.
+    """
+    fetcher = fetcher or getattr(args, "fetcher", None) or mygospel.fetch
+    if args.plain:
+        try:
+            gospel = mygospel.get_gospel(config, fetcher)
+        except mygospel.GospelError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print(json.dumps(gospel, ensure_ascii=False, indent=2)) if args.json else mygospel.show(gospel)
+        return 0
+    from datetime import date as _date
+    today = today or _date.today()
+    day = today.strftime("%Y-%m-%d")
+    folder = Path(getattr(args, "folder", "") or config.gospel_image_folder).expanduser()
+    count = getattr(args, "count", 0) or config.gospel_image_count
+    want_images = not getattr(args, "no_images", False)
+    data = None if getattr(args, "refresh", False) else myprayer.load_day(folder, day)
+    guided = dict(data) if data and myprayer.prayer_done(data) else None
+    files = myprayer.day_files(folder, day)
+
+    if guided is not None and (not want_images or myprayer.images_done(guided, folder, count)):  # nothing to do
+        if args.json:
+            print(json.dumps(guided, ensure_ascii=False, indent=2))
+        else:
+            if not files["html"].exists():
+                files["html"].write_text(myprayer.render_html(guided, guided.get("title", "Daily Gospel")), encoding="utf-8")
+            print(files["md"].read_text(encoding="utf-8") if files["md"].exists() else myprayer.render(guided))
+            print(f"(already made today: {files['md']}   -  `ml daily-gospel --refresh` makes it again)", file=sys.stderr)
+        if getattr(args, "open", False):
+            myprayer.open_page(files["html"], config.browser_command, runner)
+        return 0
+
     try:
-        gospel = mygospel.get_gospel(config, args.fetcher if hasattr(args, "fetcher") and args.fetcher else mygospel.fetch)
-    except mygospel.GospelError as error:
+        if guided is None:
+            gospel = mygospel.get_gospel(config, fetcher)
+            print("🙏 preparing the prayer with the local model ...", file=sys.stderr, flush=True)
+            guided = myprayer.compose(config, gospel, opener or myassistant.urllib.request.urlopen, spawn, sleep)
+            guided["date_line"] = myprayer.date_line(today, myprayer.liturgical_name(today))
+            guided["sources"] = [list(s) for s in (config.gospel_sources or myprayer.DEFAULT_SOURCES)]
+            guided["images"], guided["theme"], guided["image_prompt"] = [], "", ""
+        else:
+            print("(the prayer of today is already made; only the pictures are missing)", file=sys.stderr, flush=True)
+            for old in guided.get("images") or []:  # an interrupted run: start the pictures again, no _2 copies
+                Path(old).unlink(missing_ok=True)
+            guided["images"] = []
+    except (mygospel.GospelError, myassistant.AssistantError, ConfigError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
+    if getattr(args, "refresh", False) and data:
+        for old in data.get("images") or []:
+            Path(old).unlink(missing_ok=True)
+    if not args.json:
+        print(myprayer.render(guided))
+    myprayer.save_day(folder, day, guided)
+    print(f"(saved in {folder}: {files['md'].name}, {files['json'].name}, {files['html'].name})", file=sys.stderr, flush=True)
+    status = 0
+    if want_images:
+        try:
+            prompt, paths, theme = mygospel.make_images(config, guided, _live_runner(runner), opener=opener or myassistant.urllib.request.urlopen, spawn=spawn, sleep=sleep,
+                                                        count=count, folder=str(folder), backend=getattr(args, "backend", "") or "", note=False)
+            guided["images"], guided["theme"], guided["image_prompt"] = paths, theme, prompt
+            myprayer.save_day(folder, day, guided)
+            if not args.json:
+                for path in paths:
+                    print(path)
+        except (mygospel.GospelError, myimage.ImageError, myassistant.AssistantError, ConfigError) as error:
+            print(f"error (the prayer is saved, the pictures are not): {error}", file=sys.stderr)
+            status = 1
     if args.json:
-        print(json.dumps(gospel, ensure_ascii=False, indent=2))
-    else:
-        mygospel.show(gospel)
-    return 0
+        print(json.dumps({**guided, "images": [str(i) for i in guided["images"]]}, ensure_ascii=False, indent=2))
+    if (getattr(args, "open", False) or (status == 0 and not getattr(args, "no_open", False) and config.create_image_open_after)):
+        myprayer.open_page(files["html"], config.browser_command, runner)  # the finished page, in your browser
+    return status
 
 
-def cmd_daily_gospel_image(args, config: Config, runner=default_runner, spawn=default_spawn, sleep=time.sleep, opener=None, fetcher=None, **_) -> int:
-    """ml daily-gospel-image: the Gospel -> an image prompt written by Ollama -> three pictures (create image)."""
-    if runner is default_runner:  # in a terminal: show the progress of the image model
-        real = default_runner
-
-        def runner(command, input_text=None):
-            return real(command, input_text) if command and command[0] in ("security", "open", "sips") else subprocess.run(command, check=False)
+def cmd_daily_gospel_image(args, config: Config, runner=default_runner, spawn=default_spawn, sleep=time.sleep, opener=None, fetcher=None, gospel=None, **_) -> int:
+    """ml daily-gospel-image: the Gospel -> a theme name and an image prompt written by Ollama -> pictures named after the theme."""
+    runner = _live_runner(runner)
     try:
-        gospel = mygospel.get_gospel(config, fetcher or mygospel.fetch)
-        prompt, paths = mygospel.make_images(config, gospel, runner, opener=opener or myassistant.urllib.request.urlopen, spawn=spawn, sleep=sleep,
-                                             count=args.count, folder=args.folder, prompt_only=args.prompt_only, backend=args.backend or "")
+        gospel = gospel or mygospel.get_gospel(config, fetcher or mygospel.fetch)
+        prompt, paths, theme = mygospel.make_images(config, gospel, runner, opener=opener or myassistant.urllib.request.urlopen, spawn=spawn, sleep=sleep,
+                                                    count=getattr(args, "count", 0), folder=getattr(args, "folder", ""), prompt_only=getattr(args, "prompt_only", False),
+                                                    backend=getattr(args, "backend", "") or "")
     except (mygospel.GospelError, myimage.ImageError, myassistant.AssistantError, ConfigError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
-    if args.json:
-        print(json.dumps({"title": gospel["title"], "prompt": prompt, "files": [str(p) for p in paths]}, ensure_ascii=False, indent=2))
+    if args.json and not getattr(args, "images", False):
+        print(json.dumps({"title": gospel["title"], "theme": theme, "prompt": prompt, "files": [str(p) for p in paths]}, ensure_ascii=False, indent=2))
     else:
         for path in paths:
             print(path)
-        if not args.prompt_only and not args.no_open and config.create_image_open_after and paths:
+        if paths and not getattr(args, "prompt_only", False) and not getattr(args, "no_open", False) and config.create_image_open_after:
             try:
                 runner(["open", str(paths[0].parent)])
             except FileNotFoundError:
@@ -1367,6 +1450,16 @@ def make_parser() -> argparse.ArgumentParser:
     image_p.add_argument("--no-open", action="store_true", help="do not open the picture afterwards")
     image_p.set_defaults(func=cmd_create_image)
     gospel_p = sub.add_parser("daily-gospel", aliases=["daily_gospel"], parents=[common], help="today's Gospel reading (Evangelizo feed): title, date, reading, link")
+    gospel_p.add_argument("--plain", action="store_true", help="only the reading of the feed (no model, no prayers)")
+    gospel_p.add_argument("--no-images", action="store_true", help="the prayer only (no pictures, which take minutes each)")
+    gospel_p.add_argument("--save", action="store_true", help=argparse.SUPPRESS)  # old option: saving is now always done
+    gospel_p.add_argument("--images", action="store_true", help=argparse.SUPPRESS)  # old option: pictures are now the default
+    gospel_p.add_argument("--count", type=int, default=0, metavar="N", help="how many pictures (default: gospel.image_count)")
+    gospel_p.add_argument("--folder", default="", help="where to save the files and pictures (default: gospel.image_folder)")
+    gospel_p.add_argument("--backend", choices=["mflux", "ollama", "openrouter"], default="", help="override create_image.backend")
+    gospel_p.add_argument("--refresh", action="store_true", help="make today's prayer and pictures again even if the files already exist")
+    gospel_p.add_argument("--open", action="store_true", help="open the page (DATE-gospel-prayer.html) in the browser")
+    gospel_p.add_argument("--no-open", action="store_true", help="do not open the page when it is finished")
     gospel_p.set_defaults(func=cmd_daily_gospel)
     gimage_p = sub.add_parser("daily-gospel-image", aliases=["daily_gospel_image"], parents=[common], help="an image prompt from today's Gospel (Ollama), then pictures of it (create image)")
     gimage_p.add_argument("--count", type=int, default=0, metavar="N", help="how many pictures (default: gospel.image_count)")

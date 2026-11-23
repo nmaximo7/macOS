@@ -38,6 +38,7 @@ import myaerospace
 import mypower
 import mytimer
 import mynews
+import myprayer
 from mysecret import ensure_file
 from mykill import alive, applescript_quote, running_apps
 from mytypes import Item
@@ -91,6 +92,8 @@ class RunOptions:
     weather_location: str = ""  # weather: "" = wttr.in guesses it from your address; or "Paris", "Madrid"...
     weather_format: str = "%c+%t"  # weather: wttr.in format (%c icon, %t temperature, %h humidity, %w wind...)
     weather_timeout: int = 6  # weather: seconds before giving up
+    gospel_folder: str = ""  # daily_gospel: where the DATE-gospel-* files are
+    gospel_image_count: int = 3
     news_feeds_file: str = ""  # news: conf/feeds.json
     news_cache_folder: str = "~/Library/Caches/mylauncher"
     news_timeout: int = 8
@@ -327,7 +330,21 @@ def briefing(item: Item, runner=default_runner, dry_run: bool = False, options=N
 
 
 def daily_gospel(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
-    """`daily_gospel` (a command row): open a terminal that runs  ml daily-gospel."""
+    """`daily_gospel` (a command row). If today's prayer and pictures are already made, open the page (DATE-gospel-prayer.html) in the
+    browser at once. Otherwise open a terminal that runs  ml daily-gospel  (it makes everything, then opens the page itself)."""
+    options = options or RunOptions()
+    folder = Path(options.gospel_folder).expanduser() if options.gospel_folder else None
+    day = time.strftime("%Y-%m-%d")
+    data = myprayer.load_day(folder, day) if folder else None
+    if data and myprayer.prayer_done(data) and myprayer.images_done(data, folder, options.gospel_image_count):
+        files = myprayer.day_files(folder, day)
+        if dry_run:
+            return ActionResult(True, f"dry run, nothing was done. Would open {files['html']}", [])
+        if not files["html"].exists():  # made by an older version: draw the page from the saved data
+            files["html"].write_text(myprayer.render_html(data, data.get("title", "Daily Gospel")), encoding="utf-8")
+        if myprayer.open_page(files["html"], options.browser_command, runner):
+            return ActionResult(True, f"today's prayer ({files['html'].name}) is open in your browser", [])
+        return ActionResult(False, f"could not open {files['html']}", [])
     return execute_terminal(Item(id=item.id, title="daily gospel", kind="ai", action="execute_terminal", target=ml_command("daily-gospel")), runner, dry_run, options)
 
 

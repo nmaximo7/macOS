@@ -50,10 +50,44 @@
     "{todo}"
   ],
   "gospel_image": [
-    "Below is today's Gospel reading ({title}).",
-    "Write ONE prompt for an AI image generator that shows its core scene, imagery or theme.",
-    "The prompt must be descriptive, cinematic and reverent: name the setting (place, time of day, weather), the figures and what they do, their clothing, the light, the colours, the composition (for example 'wide cinematic shot, 16:9') and the mood, in realistic ancient Palestine, with natural textures.",
-    "Do not show text, letters or captions in the picture. Use one paragraph of 80 to 140 words. Answer with the prompt only: no title, no quotes, no explanation.",
+    "Below is today's Gospel reading, titled {title}.",
+    "Answer with exactly two lines and nothing else.",
+    "Line 1:  NAME: followed by a short file name for the picture's theme, English words joined by underscores, like the traditional title of the scene (examples: Jesus_Good_Shepherd, Calming_The_Storm, Sermon_On_The_Mount, Prodigal_Son). Letters, digits and underscores only, 2 to 5 words.",
+    "Line 2:  PROMPT: followed by ONE prompt for an AI image generator that shows the core scene, imagery or theme of the reading. It must be descriptive, cinematic and reverent: the setting (place, time of day, weather), the figures and what they do, their clothing, the light, the colours, the composition (wide cinematic shot, 16:9) and the mood, in realistic ancient Palestine, with natural textures. No text, letters or captions in the picture. One paragraph of 80 to 140 words.",
+    "",
+    "Reading:",
+    "{reading}"
+  ],
+  "gospel_opening": [
+    "Write the OPENING prayer for a short guided prayer time that starts with today's Gospel reading.",
+    "Below are opening prayers I like, separated by lines with ---. Learn their tone, length and structure (a thank-you to God, our needs and burdens, a request to slow down and be present) and write ONE NEW prayer in the same spirit, in the second person (\"You\") and first person plural (\"we\"). It may allude gently to the theme of today's reading but must not quote, extend or interpret scripture.",
+    "Start with 🙏 . Three to five sentences. Answer with the prayer only: no title, no quotes, no explanation.",
+    "",
+    "Example opening prayers:",
+    "{prayers}",
+    "",
+    "Today's reading ({title}):",
+    "{reading}"
+  ],
+  "gospel_closing": [
+    "Write the CLOSING prayer for a short guided prayer time that has just read today's Gospel.",
+    "Below are closing prayers I like, separated by lines with ---. Learn their tone, length and structure and write ONE NEW prayer in the same spirit that echoes one theme of today's reading, in the second person (\"You\") and first person plural or singular. Do not quote, extend or interpret scripture, and do not add saints or feasts.",
+    "Start with 🙏 and end with Amen. Two to four sentences. Answer with the prayer only: no title, no quotes, no explanation.",
+    "",
+    "Example closing prayers:",
+    "{prayers}",
+    "",
+    "Today's reading ({title}):",
+    "{reading}"
+  ],
+  "gospel_reflection": [
+    "Here is today's Gospel reading, titled {title}.",
+    "Add exactly three brief, open-ended questions grounded ONLY in the passage just read. Rules:",
+    "- Each question is one sentence, addressed to the reader (\"you\").",
+    "- Anchor each in a specific phrase, image, or action from the reading.",
+    "- Ask, don't tell: no question may contain an interpretation the text does not support (for example avoid \"Why does Jesus emphasize...\" when the text does not show emphasis).",
+    "- Do not reuse the same theme across the three: one about NOTICING, one about RESPONSE, one about the reader's OWN LIFE.",
+    "Answer with the three questions only, one per line, numbered 1. 2. 3., with no introduction and no commentary.",
     "",
     "Reading:",
     "{reading}"

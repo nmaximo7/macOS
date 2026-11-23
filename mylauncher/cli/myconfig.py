@@ -181,6 +181,11 @@ class Config:
     gospel_timeout: int = 20
     gospel_image_count: int = 3
     gospel_image_folder: str = "~/Pictures/daily-gospel"
+    gospel_opening_prayers: Path = Path("opening_prayers.md")
+    gospel_closing_prayers: Path = Path("closing_prayers.md")
+    gospel_image_format: str = "jpg"
+    gospel_image_quality: int = 95
+    gospel_sources: tuple = ()  # ((title, url), ...) shown in the last line of the prayer; empty = the built-in three
     create_image_backend: str = "mflux"
     create_image_mflux_command: str = "~/macOS/myPython/.venv/bin/mflux-generate-flux2"
     create_image_mflux_args: tuple = ("--model", "flux2-klein-base-9b", "--quantize", "8", "--low-ram", "--steps", "50", "--guidance", "3.5", "--width", "1920", "--height", "1088")
@@ -424,6 +429,16 @@ def parse_config(data, path: Path) -> Config:
     gospel_count = _check(gs.get("image_count", 3), int, "gospel.image_count")
     if gospel_timeout < 1 or not 1 <= gospel_count <= 12:
         raise ConfigError("gospel: timeout_seconds >= 1 and image_count between 1 and 12")
+    def _beside(value, label):  # a file next to the configuration unless it is an absolute path
+        file = Path(_check(value, str, label)).expanduser()
+        return file if file.is_absolute() else Path(path).parent / file
+    gospel_image_format = _check(gs.get("image_format", "jpg"), str, "gospel.image_format").strip().lower().lstrip(".")
+    gospel_image_quality = _check(gs.get("image_quality", 95), int, "gospel.image_quality")
+    gospel_sources_raw = gs.get("sources", [])
+    if not isinstance(gospel_sources_raw, list) or not all(isinstance(x, dict) and isinstance(x.get("title"), str) and str(x.get("url", "")).startswith(("http://", "https://")) for x in gospel_sources_raw):
+        raise ConfigError('gospel.sources must be a list like [{"title": "Pray As You Go", "url": "https://prayasyougo.org/"}]')
+    if gospel_image_format not in ("jpg", "jpeg", "png") or not 1 <= gospel_image_quality <= 100:
+        raise ConfigError("gospel.image_format is jpg or png and image_quality 1-100")
     news_section = _check(data.get("news", {}), dict, "news")
     news_feeds = Path(_check(news_section.get("feeds_file", "feeds.json"), str, "news.feeds_file")).expanduser()
     if not news_feeds.is_absolute():
@@ -690,6 +705,11 @@ def parse_config(data, path: Path) -> Config:
         timer_big_clock_seconds=timer_big_clock_seconds,
         gospel_feed_url=gospel_url,
         gospel_timeout=gospel_timeout,
+        gospel_opening_prayers=_beside(gs.get("opening_prayers_file", "opening_prayers.md"), "gospel.opening_prayers_file"),
+        gospel_closing_prayers=_beside(gs.get("closing_prayers_file", "closing_prayers.md"), "gospel.closing_prayers_file"),
+        gospel_image_format="jpg" if gospel_image_format == "jpeg" else gospel_image_format,
+        gospel_image_quality=gospel_image_quality,
+        gospel_sources=tuple((x["title"], x["url"]) for x in gospel_sources_raw),
         gospel_image_count=gospel_count,
         gospel_image_folder=_check(gs.get("image_folder", "~/Pictures/daily-gospel"), str, "gospel.image_folder").strip() or "~/Pictures/daily-gospel",
         create_image_backend=ci_backend,
