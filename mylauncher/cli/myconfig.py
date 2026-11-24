@@ -185,6 +185,17 @@ class Config:
     gospel_closing_prayers: Path = Path("closing_prayers.md")
     gospel_image_format: str = "jpg"
     gospel_image_quality: int = 95
+    post_author: str = "Máximo Núñez Alarcón"
+    post_language: str = "en"
+    post_weight: int = 1
+    post_categories: tuple = ("spirituality", "prayer")
+    post_draft: bool = False
+    post_featured_number: int = 1
+    post_image_prefix: str = "/prayer/images"
+    post_remote_host: str = "myserver"
+    post_remote_images_dir: str = "/mnt/data/justtothepoint/static/prayer/images/"
+    post_remote_post_dir: str = "/mnt/data/justtothepoint/prayer/"
+    post_ssh_timeout: int = 15
     gospel_sources: tuple = ()  # ((title, url), ...) shown in the last line of the prayer; empty = the built-in three
     create_image_backend: str = "mflux"
     create_image_mflux_command: str = "~/macOS/myPython/.venv/bin/mflux-generate-flux2"
@@ -437,6 +448,24 @@ def parse_config(data, path: Path) -> Config:
     gospel_sources_raw = gs.get("sources", [])
     if not isinstance(gospel_sources_raw, list) or not all(isinstance(x, dict) and isinstance(x.get("title"), str) and str(x.get("url", "")).startswith(("http://", "https://")) for x in gospel_sources_raw):
         raise ConfigError('gospel.sources must be a list like [{"title": "Pray As You Go", "url": "https://prayasyougo.org/"}]')
+    ps = _check(data.get("post", {}), dict, "post")
+    post_categories = ps.get("categories", ["spirituality", "prayer"])
+    if not isinstance(post_categories, list) or not all(isinstance(c, str) and c.strip() for c in post_categories):
+        raise ConfigError('post.categories must be a list of words, like ["spirituality", "prayer"]')
+    post_weight = _check(ps.get("weight", 1), int, "post.weight")
+    post_featured = _check(ps.get("featured_image_number", 1), int, "post.featured_image_number")
+    post_timeout = _check(ps.get("ssh_timeout_seconds", 15), int, "post.ssh_timeout_seconds")
+    post_prefix = _check(ps.get("image_url_prefix", "/prayer/images"), str, "post.image_url_prefix").strip()
+    post_host = _check(ps.get("remote_host", "myserver"), str, "post.remote_host").strip()
+    if post_featured < 1 or post_timeout < 1:
+        raise ConfigError("post.featured_image_number and post.ssh_timeout_seconds must be 1 or more")
+    if not post_host or post_host.startswith("-") or any(ch.isspace() for ch in post_host):
+        raise ConfigError("post.remote_host is the Host alias of ~/.ssh/config (no spaces, not starting with -)")
+    if not post_prefix.startswith("/"):
+        raise ConfigError("post.image_url_prefix is the address of the pictures on the site, starting with /  (for example /prayer/images)")
+    post_dirs = [_check(ps.get(k, d), str, f"post.{k}").strip() for k, d in (("remote_images_dir", "/mnt/data/justtothepoint/static/prayer/images/"), ("remote_post_dir", "/mnt/data/justtothepoint/prayer/"))]
+    if not all(d.startswith("/") and len(d.strip("/")) > 3 for d in post_dirs):
+        raise ConfigError("post.remote_images_dir and post.remote_post_dir are absolute folders on the server (like /mnt/data/justtothepoint/prayer/)")
     if gospel_image_format not in ("jpg", "jpeg", "png") or not 1 <= gospel_image_quality <= 100:
         raise ConfigError("gospel.image_format is jpg or png and image_quality 1-100")
     news_section = _check(data.get("news", {}), dict, "news")
@@ -709,6 +738,17 @@ def parse_config(data, path: Path) -> Config:
         gospel_closing_prayers=_beside(gs.get("closing_prayers_file", "closing_prayers.md"), "gospel.closing_prayers_file"),
         gospel_image_format="jpg" if gospel_image_format == "jpeg" else gospel_image_format,
         gospel_image_quality=gospel_image_quality,
+        post_author=_check(ps.get("author", "Máximo Núñez Alarcón"), str, "post.author"),
+        post_language=_check(ps.get("language", "en"), str, "post.language"),
+        post_weight=post_weight,
+        post_categories=tuple(post_categories),
+        post_draft=_check(ps.get("draft", False), bool, "post.draft"),
+        post_featured_number=post_featured,
+        post_image_prefix=post_prefix,
+        post_remote_host=post_host,
+        post_remote_images_dir=post_dirs[0],
+        post_remote_post_dir=post_dirs[1],
+        post_ssh_timeout=post_timeout,
         gospel_sources=tuple((x["title"], x["url"]) for x in gospel_sources_raw),
         gospel_image_count=gospel_count,
         gospel_image_folder=_check(gs.get("image_folder", "~/Pictures/daily-gospel"), str, "gospel.image_folder").strip() or "~/Pictures/daily-gospel",

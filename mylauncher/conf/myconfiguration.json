@@ -228,6 +228,20 @@
       "confirm": false,
       "icon": "🕊️",
       "description": "Prompt from today's Gospel + three pictures  ·  ml daily-gospel-image"
+    },
+    {
+      "id": "daily_gospel_post",
+      "title": "daily gospel post",
+      "action": "daily_gospel_post",
+      "keywords": [
+        "daily_gospel_post",
+        "gospel post",
+        "publish gospel",
+        "hugo"
+      ],
+      "confirm": true,
+      "icon": "🌐",
+      "description": "Hugo post of today's prayer, uploaded to your server  ·  ml daily-gospel-post"
     }
   ],
   "notifications": {
@@ -360,5 +374,21 @@
         "url": "https://prayasyougo.org/"
       }
     ]
+  },
+  "post": {
+    "author": "Máximo Núñez Alarcón",
+    "language": "en",
+    "weight": 1,
+    "categories": [
+      "spirituality",
+      "prayer"
+    ],
+    "draft": false,
+    "featured_image_number": 1,
+    "image_url_prefix": "/prayer/images",
+    "remote_host": "myserver",
+    "remote_images_dir": "/mnt/data/justtothepoint/static/prayer/images/",
+    "remote_post_dir": "/mnt/data/justtothepoint/prayer/",
+    "ssh_timeout_seconds": 15
   }
 }

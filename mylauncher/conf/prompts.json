@@ -91,5 +91,14 @@
     "",
     "Reading:",
     "{reading}"
+  ],
+  "gospel_post_meta": [
+    "Below is today's Gospel reading, titled {title}. It will be a post on a prayer website.",
+    "Answer with exactly two lines and nothing else.",
+    "Line 1:  TITLE: followed by a short, evocative title of 3 to 9 words that uses the words and images of the reading (for example: There was the Lamb standing on Mount Zion). No quotes, no final period.",
+    "Line 2:  DESCRIPTION: followed by ONE sentence of at most 220 characters taken from the reading itself (its opening words, or a faithful one-sentence summary in its own words). No quotes.",
+    "",
+    "Reading:",
+    "{reading}"
   ]
 }

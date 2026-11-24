@@ -44,7 +44,7 @@ from mykill import alive, applescript_quote, running_apps
 from mytypes import Item
 
 # Actions that a "command" in the configuration file may use. (Apps always use open_app.)
-COMMAND_ACTIONS = ("shutdown", "reboot", "screenshot_full", "screenshot_region", "weather", "briefing", "daily_gospel", "daily_gospel_image")
+COMMAND_ACTIONS = ("shutdown", "reboot", "screenshot_full", "screenshot_region", "weather", "briefing", "daily_gospel", "daily_gospel_image", "daily_gospel_post")
 
 
 @dataclass
@@ -351,6 +351,11 @@ def daily_gospel(item: Item, runner=default_runner, dry_run: bool = False, optio
 def daily_gospel_image(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
     """`daily_gospel_image` (a command row): open a terminal that runs  ml daily-gospel-image (a prompt, then three pictures)."""
     return execute_terminal(Item(id=item.id, title="daily gospel image", kind="ai", action="execute_terminal", target=ml_command("daily-gospel-image")), runner, dry_run, options)
+
+
+def daily_gospel_post(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """`daily_gospel_post` (a command row, with confirmation: it PUBLISHES): a terminal that runs  ml daily-gospel-post."""
+    return execute_terminal(Item(id=item.id, title="daily gospel post", kind="ai", action="execute_terminal", target=ml_command("daily-gospel-post")), runner, dry_run, options)
 
 
 def timer(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
@@ -675,6 +680,7 @@ ACTIONS = {
     "briefing": briefing,
     "daily_gospel": daily_gospel,
     "daily_gospel_image": daily_gospel_image,
+    "daily_gospel_post": daily_gospel_post,
     "news_refresh": news_refresh,
     "screenshot_full": screenshot_full,
     "screenshot_region": screenshot_region,

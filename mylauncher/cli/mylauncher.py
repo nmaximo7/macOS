@@ -60,6 +60,7 @@ import mytimer
 import mynews
 import myimage
 import mygospel
+import mypost
 import myprayer
 import myassistant
 import mybriefing
@@ -1093,6 +1094,60 @@ def cmd_daily_gospel(args, config: Config, runner=default_runner, spawn=default_
     return status
 
 
+def cmd_daily_gospel_post(args, config: Config, runner=default_runner, spawn=default_spawn, sleep=time.sleep, opener=None, fetcher=None, today=None, out=None, **_) -> int:
+    """ml daily-gospel-post: today's prayer as a Hugo post on your website.
+
+    1. today's prayer and pictures (made first if they are not there), 2. title + description by Ollama (kept in the day's .json),
+    3. DATE-gospel-prayer-post.md with the Hugo front matter and the pictures at /prayer/images/, 4. pictures to the server, then the post.
+    --dry-run: write the post locally and only PRINT the ssh/scp commands.  --no-upload: only write the post.  --draft: draft: true.
+    --new-title: ask the model for another title/description.
+    """
+    from dataclasses import replace
+    from datetime import date as _date
+    out = out or sys.stderr
+    today = today or _date.today()
+    day = today.strftime("%Y-%m-%d")
+    folder = Path(config.gospel_image_folder).expanduser()
+    if getattr(args, "draft", False):
+        config = replace(config, post_draft=True)
+    data = myprayer.load_day(folder, day)
+    if not (myprayer.prayer_done(data) and myprayer.images_done(data, folder, config.gospel_image_count)):
+        print("today's prayer or pictures are not complete: making them first (ml daily-gospel) ...", file=out, flush=True)
+        inner = argparse.Namespace(json=False, plain=False, no_images=False, refresh=False, open=False, no_open=True, count=0, folder="", backend="", fetcher=getattr(args, "fetcher", None))
+        status = cmd_daily_gospel(inner, config, runner=runner, spawn=spawn, sleep=sleep, opener=opener, fetcher=fetcher, today=today)
+        data = myprayer.load_day(folder, day)
+        if status != 0 or not (myprayer.prayer_done(data) and myprayer.images_done(data, folder, config.gospel_image_count)):
+            print("error: the prayer or the pictures could not be completed, so nothing is posted.", file=sys.stderr)
+            return 1
+    if not data.get("post") or getattr(args, "new_title", False):
+        print("asking the local model for a title and a description ...", file=out, flush=True)
+        data["post"] = mypost.make_meta(config, data, opener or myassistant.urllib.request.urlopen, spawn, sleep)
+        myprayer.save_day(folder, day, data)  # kept: the second run today does not ask again
+    meta = data["post"]
+    for note in meta.get("notes", []):
+        print(f"({note})", file=out, flush=True)
+    post = folder / f"{day}-gospel-prayer-post.md"
+    post.write_text(mypost.build_post(config, data, meta, today), encoding="utf-8")
+    print(f"post written: {post}\n  title: {meta['title']}\n  description: {meta['description']}", file=out, flush=True)
+    images = [Path(i) for i in data["images"]]
+    if getattr(args, "no_upload", False):
+        print("(--no-upload: nothing was sent to the server)", file=out, flush=True)
+        return 0
+    plan = mypost.plan_upload(config, images, post)
+    dry = getattr(args, "dry_run", False)
+    live = _live_runner(runner) if not dry else runner
+    try:
+        mypost.upload(plan, live, out, dry_run=dry)
+    except mypost.PostError as error:
+        print(f"error: {error}\nThe post is saved in {post}; run the same command again when the server is reachable.", file=sys.stderr)
+        return 1
+    if dry:
+        print("(--dry-run: nothing was sent)", file=out, flush=True)
+    else:
+        print(f"✔ on {config.post_remote_host}:\n  - {config.post_remote_images_dir}  ({', '.join(i.name for i in images)})\n  - {config.post_remote_post_dir}{post.name}", file=out, flush=True)
+    return 0
+
+
 def cmd_daily_gospel_image(args, config: Config, runner=default_runner, spawn=default_spawn, sleep=time.sleep, opener=None, fetcher=None, gospel=None, **_) -> int:
     """ml daily-gospel-image: the Gospel -> a theme name and an image prompt written by Ollama -> pictures named after the theme."""
     runner = _live_runner(runner)
@@ -1461,6 +1516,12 @@ def make_parser() -> argparse.ArgumentParser:
     gospel_p.add_argument("--open", action="store_true", help="open the page (DATE-gospel-prayer.html) in the browser")
     gospel_p.add_argument("--no-open", action="store_true", help="do not open the page when it is finished")
     gospel_p.set_defaults(func=cmd_daily_gospel)
+    gpost_p = sub.add_parser("daily-gospel-post", aliases=["daily_gospel_post"], parents=[common], help="today's prayer as a Hugo post: pictures and post copied to your server (ssh/scp)")
+    gpost_p.add_argument("--dry-run", action="store_true", help="write the post locally and only PRINT the ssh/scp commands")
+    gpost_p.add_argument("--no-upload", action="store_true", help="only write DATE-gospel-prayer-post.md; send nothing")
+    gpost_p.add_argument("--draft", action="store_true", help="front matter draft: true (the site does not show it yet)")
+    gpost_p.add_argument("--new-title", action="store_true", help="ask the model for another title and description")
+    gpost_p.set_defaults(func=cmd_daily_gospel_post)
     gimage_p = sub.add_parser("daily-gospel-image", aliases=["daily_gospel_image"], parents=[common], help="an image prompt from today's Gospel (Ollama), then pictures of it (create image)")
     gimage_p.add_argument("--count", type=int, default=0, metavar="N", help="how many pictures (default: gospel.image_count)")
     gimage_p.add_argument("--folder", default="", help="where to save them (default: gospel.image_folder)")
