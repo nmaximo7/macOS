@@ -23,8 +23,8 @@ What we read
   * in each file, the list under `matches`; each entry with `trigger` (or `triggers`, a list) and a
     plain-text `replace`.
 What we skip (and count, so `ml doctor` can tell you)
-  * entries with `vars` or `form` or `{{...}}` in the text (dates, clipboard, shell commands, forms):
-    they need Espanso itself to be evaluated; `regex` triggers; entries without a text `replace`.
+  * entries with `vars` or `form` or a variable like `{{name}}` in the text (dates, clipboard, shell commands, forms):
+    they need Espanso itself to be evaluated. Hugo shortcodes (`{{% pborder %}}`, `{{< figure >}}`) are NOT variables: they are kept; `regex` triggers; entries without a text `replace`.
 The cursor marker $|$ (where Espanso puts the cursor) is removed, because a clipboard has no cursor.
 
 YAML is not part of Python's standard library, so this one module needs PyYAML (it is in
@@ -34,10 +34,14 @@ app/requirements.txt). If it is missing the launcher still works, just without s
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 CURSOR_MARKER = "$|$"
+# An Espanso VARIABLE looks like {{name}} (letters, digits, _ or .). Hugo shortcodes look like {{% pborder %}} or {{< figure >}}:
+# they are plain text for Espanso and must be copied as they are (before, any "{{" made the snippet "dynamic" and it was skipped).
+VARIABLE = re.compile(r"\{\{\s*[\w.]+\s*\}\}")
 YAML_SUFFIXES = (".yml", ".yaml")
 
 
@@ -103,7 +107,7 @@ def parse_matches(data, source: str = "", strip_cursor: bool = True, notes: list
         text = entry.get("replace")
         if isinstance(text, (int, float)) and not isinstance(text, bool):
             text = str(text)
-        dynamic = "vars" in entry or "form" in entry or (isinstance(text, str) and "{{" in text)
+        dynamic = "vars" in entry or "form" in entry or (isinstance(text, str) and VARIABLE.search(text) is not None)
         if not triggers or not isinstance(text, str) or dynamic:
             skipped += 1  # regex triggers, images, forms, variables...: Espanso itself is needed for these
             if notes is not None:

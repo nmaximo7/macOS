@@ -11,9 +11,9 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-VERSION = "0.17.0"
-STEP = "Step 17"
-BUILT = "2026-11-24"
+VERSION = "0.19.0"
+STEP = "Step 19.1"
+BUILT = "2026-11-25"
 
 ROOT = Path(__file__).resolve().parent.parent
 

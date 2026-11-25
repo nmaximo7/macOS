@@ -185,6 +185,11 @@ class Config:
     gospel_closing_prayers: Path = Path("closing_prayers.md")
     gospel_image_format: str = "jpg"
     gospel_image_quality: int = 95
+    facebook_mode: str = "persistent"
+    facebook_profile: str = "~/playwright-fb-profile"
+    facebook_channel: str = "chrome"
+    facebook_cdp_port: int = 9222
+    facebook_url: str = "https://www.facebook.com"
     post_author: str = "Máximo Núñez Alarcón"
     post_language: str = "en"
     post_weight: int = 1
@@ -194,7 +199,7 @@ class Config:
     post_image_prefix: str = "/prayer/images"
     post_remote_host: str = "myserver"
     post_remote_images_dir: str = "/mnt/data/justtothepoint/static/prayer/images/"
-    post_remote_post_dir: str = "/mnt/data/justtothepoint/prayer/"
+    post_remote_post_dir: str = "/mnt/data/justtothepoint/content/prayer/"
     post_ssh_timeout: int = 15
     gospel_sources: tuple = ()  # ((title, url), ...) shown in the last line of the prayer; empty = the built-in three
     create_image_backend: str = "mflux"
@@ -448,6 +453,11 @@ def parse_config(data, path: Path) -> Config:
     gospel_sources_raw = gs.get("sources", [])
     if not isinstance(gospel_sources_raw, list) or not all(isinstance(x, dict) and isinstance(x.get("title"), str) and str(x.get("url", "")).startswith(("http://", "https://")) for x in gospel_sources_raw):
         raise ConfigError('gospel.sources must be a list like [{"title": "Pray As You Go", "url": "https://prayasyougo.org/"}]')
+    fb = _check(data.get("facebook", {}), dict, "facebook")
+    fb_mode = _check(fb.get("mode", "persistent"), str, "facebook.mode").strip().lower()
+    fb_port = _check(fb.get("cdp_port", 9222), int, "facebook.cdp_port")
+    if fb_mode not in ("persistent", "cdp") or not 1024 <= fb_port <= 65535:
+        raise ConfigError('facebook.mode is "persistent" or "cdp"; facebook.cdp_port is a port number (9222)')
     ps = _check(data.get("post", {}), dict, "post")
     post_categories = ps.get("categories", ["spirituality", "prayer"])
     if not isinstance(post_categories, list) or not all(isinstance(c, str) and c.strip() for c in post_categories):
@@ -463,7 +473,7 @@ def parse_config(data, path: Path) -> Config:
         raise ConfigError("post.remote_host is the Host alias of ~/.ssh/config (no spaces, not starting with -)")
     if not post_prefix.startswith("/"):
         raise ConfigError("post.image_url_prefix is the address of the pictures on the site, starting with /  (for example /prayer/images)")
-    post_dirs = [_check(ps.get(k, d), str, f"post.{k}").strip() for k, d in (("remote_images_dir", "/mnt/data/justtothepoint/static/prayer/images/"), ("remote_post_dir", "/mnt/data/justtothepoint/prayer/"))]
+    post_dirs = [_check(ps.get(k, d), str, f"post.{k}").strip() for k, d in (("remote_images_dir", "/mnt/data/justtothepoint/static/prayer/images/"), ("remote_post_dir", "/mnt/data/justtothepoint/content/prayer/"))]
     if not all(d.startswith("/") and len(d.strip("/")) > 3 for d in post_dirs):
         raise ConfigError("post.remote_images_dir and post.remote_post_dir are absolute folders on the server (like /mnt/data/justtothepoint/prayer/)")
     if gospel_image_format not in ("jpg", "jpeg", "png") or not 1 <= gospel_image_quality <= 100:
@@ -738,6 +748,11 @@ def parse_config(data, path: Path) -> Config:
         gospel_closing_prayers=_beside(gs.get("closing_prayers_file", "closing_prayers.md"), "gospel.closing_prayers_file"),
         gospel_image_format="jpg" if gospel_image_format == "jpeg" else gospel_image_format,
         gospel_image_quality=gospel_image_quality,
+        facebook_mode=fb_mode,
+        facebook_profile=_check(fb.get("profile_dir", "~/playwright-fb-profile"), str, "facebook.profile_dir").strip(),
+        facebook_channel=_check(fb.get("channel", "chrome"), str, "facebook.channel").strip(),
+        facebook_cdp_port=fb_port,
+        facebook_url=_check(fb.get("url", "https://www.facebook.com"), str, "facebook.url").strip(),
         post_author=_check(ps.get("author", "Máximo Núñez Alarcón"), str, "post.author"),
         post_language=_check(ps.get("language", "en"), str, "post.language"),
         post_weight=post_weight,

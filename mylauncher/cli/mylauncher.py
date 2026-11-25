@@ -61,6 +61,7 @@ import mynews
 import myimage
 import mygospel
 import mypost
+import myfacebook
 import myprayer
 import myassistant
 import mybriefing
@@ -1098,7 +1099,7 @@ def cmd_daily_gospel_post(args, config: Config, runner=default_runner, spawn=def
     """ml daily-gospel-post: today's prayer as a Hugo post on your website.
 
     1. today's prayer and pictures (made first if they are not there), 2. title + description by Ollama (kept in the day's .json),
-    3. DATE-gospel-prayer-post.md with the Hugo front matter and the pictures at /prayer/images/, 4. pictures to the server, then the post.
+    3. DATE.md (for example 2026-11-24.md) with the Hugo front matter and the pictures at /prayer/images/, 4. pictures to the server, then the post.
     --dry-run: write the post locally and only PRINT the ssh/scp commands.  --no-upload: only write the post.  --draft: draft: true.
     --new-title: ask the model for another title/description.
     """
@@ -1119,6 +1120,7 @@ def cmd_daily_gospel_post(args, config: Config, runner=default_runner, spawn=def
         if status != 0 or not (myprayer.prayer_done(data) and myprayer.images_done(data, folder, config.gospel_image_count)):
             print("error: the prayer or the pictures could not be completed, so nothing is posted.", file=sys.stderr)
             return 1
+    data["sources"] = [list(s) for s in (config.gospel_sources or myprayer.DEFAULT_SOURCES)]  # today's list of links, also for a prayer made yesterday
     if not data.get("post") or getattr(args, "new_title", False):
         print("asking the local model for a title and a description ...", file=out, flush=True)
         data["post"] = mypost.make_meta(config, data, opener or myassistant.urllib.request.urlopen, spawn, sleep)
@@ -1126,7 +1128,7 @@ def cmd_daily_gospel_post(args, config: Config, runner=default_runner, spawn=def
     meta = data["post"]
     for note in meta.get("notes", []):
         print(f"({note})", file=out, flush=True)
-    post = folder / f"{day}-gospel-prayer-post.md"
+    post = folder / f"{day}.md"  # the Hugo content file: 2026-11-24.md
     post.write_text(mypost.build_post(config, data, meta, today), encoding="utf-8")
     print(f"post written: {post}\n  title: {meta['title']}\n  description: {meta['description']}", file=out, flush=True)
     images = [Path(i) for i in data["images"]]
@@ -1146,6 +1148,36 @@ def cmd_daily_gospel_post(args, config: Config, runner=default_runner, spawn=def
     else:
         print(f"✔ on {config.post_remote_host}:\n  - {config.post_remote_images_dir}  ({', '.join(i.name for i in images)})\n  - {config.post_remote_post_dir}{post.name}", file=out, flush=True)
     return 0
+
+
+def cmd_daily_gospel_facebook(args, config: Config, runner=default_runner, spawn=default_spawn, sleep=time.sleep, opener=None, fetcher=None, today=None, out=None, ask=input, sync_playwright=None, **_) -> int:
+    """ml daily-gospel-facebook: today's prayer into a Facebook post. The text goes to the clipboard; the browser pastes it and attaches the
+    pictures; YOU press Post. --copy-only: only the clipboard. --dry-run: no browser. --cdp: connect to a Chrome you started on port 9222."""
+    from dataclasses import replace
+    from datetime import date as _date
+    out = out or sys.stderr
+    today = today or _date.today()
+    day = today.strftime("%Y-%m-%d")
+    folder = Path(config.gospel_image_folder).expanduser()
+    if getattr(args, "cdp", False):
+        config = replace(config, facebook_mode="cdp")
+    data = myprayer.load_day(folder, day)
+    if not (myprayer.prayer_done(data) and myprayer.images_done(data, folder, config.gospel_image_count)):
+        print("today's prayer or pictures are not complete: making them first (ml daily-gospel) ...", file=out, flush=True)
+        inner = argparse.Namespace(json=False, plain=False, no_images=False, refresh=False, open=False, no_open=True, count=0, folder="", backend="", fetcher=getattr(args, "fetcher", None))
+        status = cmd_daily_gospel(inner, config, runner=runner, spawn=spawn, sleep=sleep, opener=opener, fetcher=fetcher, today=today)
+        data = myprayer.load_day(folder, day)
+        if status != 0 or not (myprayer.prayer_done(data) and myprayer.images_done(data, folder, config.gospel_image_count)):
+            print("error: the prayer or the pictures could not be completed, so nothing is posted.", file=sys.stderr)
+            return 1
+    data["sources"] = [list(s) for s in (config.gospel_sources or myprayer.DEFAULT_SOURCES)]  # today's list of links, also for a prayer made yesterday
+    (folder / f"{day}-facebook.txt").write_text(myfacebook.facebook_text(data), encoding="utf-8")
+    try:
+        return myfacebook.run(config, data, [Path(i) for i in data["images"]], runner, ask=ask, out=out, sync_playwright=sync_playwright,
+                              dry_run=getattr(args, "dry_run", False), copy_only=getattr(args, "copy_only", False))
+    except myfacebook.FacebookError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
 
 
 def cmd_daily_gospel_image(args, config: Config, runner=default_runner, spawn=default_spawn, sleep=time.sleep, opener=None, fetcher=None, gospel=None, **_) -> int:
@@ -1518,10 +1550,14 @@ def make_parser() -> argparse.ArgumentParser:
     gospel_p.set_defaults(func=cmd_daily_gospel)
     gpost_p = sub.add_parser("daily-gospel-post", aliases=["daily_gospel_post"], parents=[common], help="today's prayer as a Hugo post: pictures and post copied to your server (ssh/scp)")
     gpost_p.add_argument("--dry-run", action="store_true", help="write the post locally and only PRINT the ssh/scp commands")
-    gpost_p.add_argument("--no-upload", action="store_true", help="only write DATE-gospel-prayer-post.md; send nothing")
+    gpost_p.add_argument("--no-upload", action="store_true", help="only write DATE.md (the Hugo post); send nothing")
     gpost_p.add_argument("--draft", action="store_true", help="front matter draft: true (the site does not show it yet)")
     gpost_p.add_argument("--new-title", action="store_true", help="ask the model for another title and description")
     gpost_p.set_defaults(func=cmd_daily_gospel_post)
+    gfb_p = sub.add_parser("daily-gospel-facebook", aliases=["daily_gospel_facebook"], parents=[common], help="today's prayer as a Facebook post: clipboard + browser (Playwright); you press Post")
+    gfb_p.add_argument("--copy-only", action="store_true", help="only put the text in the clipboard (no browser)")
+    gfb_p.add_argument("--cdp", action="store_true", help="connect to a Chrome that you started with --remote-debugging-port=9222")
+    gfb_p.set_defaults(func=cmd_daily_gospel_facebook)
     gimage_p = sub.add_parser("daily-gospel-image", aliases=["daily_gospel_image"], parents=[common], help="an image prompt from today's Gospel (Ollama), then pictures of it (create image)")
     gimage_p.add_argument("--count", type=int, default=0, metavar="N", help="how many pictures (default: gospel.image_count)")
     gimage_p.add_argument("--folder", default="", help="where to save them (default: gospel.image_folder)")

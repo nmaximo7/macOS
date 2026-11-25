@@ -49,6 +49,8 @@ class Parsing(unittest.TestCase):
         entries = [
             {"trigger": ";date", "replace": "{{today}}", "vars": [{"name": "today", "type": "date"}]},
             {"trigger": ";inline", "replace": "Hi {{name}}"},
+            {"trigger": ";hborder", "replace": "{{% pborder %}}\n$|$\n{{% /pborder %}}"},
+            {"trigger": ";hfig", "replace": "{{< figure src=\"a.png\" >}}"},
             {"trigger": ";form", "form": "Name: [[n]]"},
             {"regex": ";r(\\d)", "replace": "x"},
             {"trigger": ";img", "image_path": "/a.png"},
@@ -57,7 +59,9 @@ class Parsing(unittest.TestCase):
             {"trigger": ";ok", "replace": "fine"},
         ]
         snippets, skipped = self.parse(entries)
-        self.assertEqual([s.trigger for s in snippets], [";ok"])
+        # Hugo shortcodes ({{% ... %}}, {{< ... >}}) are plain text: kept, cursor marker removed. Variables {{name}} are skipped.
+        self.assertEqual([s.trigger for s in snippets], [";hborder", ";hfig", ";ok"])
+        self.assertEqual(snippets[0].text, "{{% pborder %}}\n\n{{% /pborder %}}")
         self.assertEqual(skipped, 7)
 
     def test_numbers_are_text_but_booleans_are_not(self):

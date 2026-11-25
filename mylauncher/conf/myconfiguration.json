@@ -242,6 +242,19 @@
       "confirm": true,
       "icon": "🌐",
       "description": "Hugo post of today's prayer, uploaded to your server  ·  ml daily-gospel-post"
+    },
+    {
+      "id": "daily_gospel_facebook",
+      "title": "daily gospel facebook",
+      "action": "daily_gospel_facebook",
+      "keywords": [
+        "daily_gospel_facebook",
+        "gospel facebook",
+        "facebook post"
+      ],
+      "confirm": false,
+      "icon": "📘",
+      "description": "Today's prayer into a Facebook post (you press Post)  ·  ml daily-gospel-facebook"
     }
   ],
   "notifications": {
@@ -372,6 +385,10 @@
       {
         "title": "Pray As You Go",
         "url": "https://prayasyougo.org/"
+      },
+      {
+        "title": "Vatican News, Word of the Day",
+        "url": "https://www.vaticannews.va/en/word-of-the-day.html"
       }
     ]
   },
@@ -388,7 +405,14 @@
     "image_url_prefix": "/prayer/images",
     "remote_host": "myserver",
     "remote_images_dir": "/mnt/data/justtothepoint/static/prayer/images/",
-    "remote_post_dir": "/mnt/data/justtothepoint/prayer/",
+    "remote_post_dir": "/mnt/data/justtothepoint/content/prayer/",
     "ssh_timeout_seconds": 15
+  },
+  "facebook": {
+    "mode": "persistent",
+    "profile_dir": "~/playwright-fb-profile",
+    "channel": "chrome",
+    "cdp_port": 9222,
+    "url": "https://www.facebook.com"
   }
 }

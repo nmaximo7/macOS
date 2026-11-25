@@ -14,7 +14,7 @@ class RealFile(unittest.TestCase):
         self.assertEqual(config.hotkey_modifiers, ("command",))
         self.assertEqual(config.hotkey_key, "d")
         self.assertEqual((config.window_width, config.window_font_size), (680, 20))
-        self.assertEqual([c.id for c in config.commands], ["shutdown", "reboot", "screenshot_full_screen", "screenshot_region", "weather", "briefing", "daily_gospel", "daily_gospel_image", "daily_gospel_post"])
+        self.assertEqual([c.id for c in config.commands], ["shutdown", "reboot", "screenshot_full_screen", "screenshot_region", "weather", "briefing", "daily_gospel", "daily_gospel_image", "daily_gospel_post", "daily_gospel_facebook"])
         self.assertTrue(config.commands[0].confirm)
 
     def test_the_shipped_quicklinks_are_loaded_with_the_configuration(self):
