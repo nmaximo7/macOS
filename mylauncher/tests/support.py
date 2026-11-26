@@ -93,6 +93,28 @@ class FakeRunner:
         return SimpleNamespace(returncode=self.returncode, stderr=self.stderr, stdout=stdout)
 
 
+class FakeKeychain(FakeRunner):
+    """FakeRunner + a pretend macOS Keychain: `security add-generic-password` stores, `find-generic-password -w` reads (exit 44 = not found)."""
+
+    def __init__(self, store: dict | None = None, **kw):
+        super().__init__(**kw)
+        self.store = dict(store or {})  # {account: value}
+
+    def __call__(self, command, input_text=None):
+        from types import SimpleNamespace
+
+        if command and command[0] == "security":
+            self.calls.append(command)
+            account = command[command.index("-a") + 1]
+            if command[1] == "add-generic-password":
+                self.store[account] = command[-1]
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            if account in self.store:
+                return SimpleNamespace(returncode=0, stdout=self.store[account] + "\n", stderr="")
+            return SimpleNamespace(returncode=44, stdout="", stderr="not found")
+        return super().__call__(command, input_text)
+
+
 class FakeSystem:
     """A tiny pretend Mac for the kill tests: processes, `ps`, `osascript ... quit` and `kill`.
 

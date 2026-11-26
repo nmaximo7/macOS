@@ -30,6 +30,35 @@ How the pieces fit (one arrow = "uses"):
     all of them share the data shapes of  mytypes.py
 
 Exit codes:  0 = all good   1 = nothing found / action failed / cancelled   2 = bad usage or bad configuration
+
+GUIDED TOUR OF THIS FILE (for someone who is just starting to program) --------------------------
+This is the biggest file (~1800 lines) so it is read in THREE parts. A "part" is marked by a banner
+comment made of dashes; search for  "Step A", "Step B", "Step C".
+
+  Step A  (top)     BUILD AND SEARCH. Turn the configuration into a list of `Item`s (build_items, build_*_items,
+                    tool_items, news_items, emoji_items), understand what the user typed (normalize_query,
+                    detect_mode) and rank the items for it (_search). This is the "brain" of the launcher.
+  Step B  (middle)  ONE FUNCTION PER SUB-COMMAND: cmd_list, cmd_search, cmd_run, cmd_help, cmd_emoji, cmd_secret,
+                    cmd_timer, cmd_news, cmd_daily_gospel*, cmd_doctor ... Each one receives the parsed command-line
+                    arguments and the Config, does its job, prints, and RETURNS an exit code (an int).
+  Step C  (bottom)  make_parser() describes the command line (argparse) and main() ties everything together.
+
+THE LIFE OF ONE KEYSTROKE (what happens when you type  "yt lofi"  in the window):
+  1. The window (app/mylauncher_app.py) starts the program:   ml search --json "yt lofi"
+  2. main() reads the arguments -> finds the configuration (myconfig) -> calls cmd_search().
+  3. cmd_search() calls _search(): normalize_query -> split_prefix -> the first word "yt" is a quicklink
+     keyword -> ONE Item(kind="quicklink", action="open_url", target="https://youtube.com/results?...").
+  4. cmd_search() prints the items as JSON; the window draws the rows.
+  5. You press Enter: the window starts   ml run --id link:yt --json "yt lofi"   -> cmd_run() -> run_item()
+     (myactions.py) -> open_url -> `open https://...`.
+Each keystroke is a NEW short program run. That sounds slow but Python starts in ~50 ms, and it makes the
+engine trivially testable: no window, no hidden state, just  arguments in -> text out.
+
+THE INJECTION HABIT: look at the parameters of every cmd_* function: runner, spawn, sleep, opener, fetcher,
+today, out, ask. They are the "outside world" (running programs, waiting, opening files, the network, the
+clock, printing, asking the user). In real life main() passes the real ones; the tests pass fakes. That is why
+865 tests can run in 5 seconds without ever opening an app, touching the network or waiting. `**_` at the end
+of a signature means "accept and ignore any other keyword argument": every cmd_* can then be called the same way.
 """
 
 from __future__ import annotations
@@ -53,11 +82,12 @@ import myespanso
 from myexpander import describe_groups, group_of, load_snippets, preview
 from myedit import build_edit_items
 from myexecute import build_execute_items
-from mysecret import add_name, set_notes, build_secret_items, edit_item, file_problems, read_secrets
+from mysecret import add_name, scrub_names, keychain_get, set_notes, build_secret_items, edit_item, file_problems, read_secrets, table as secret_table
 from mynotify import resolve as resolve_notifier, send as send_notification
 import myversion
 import mytimer
 import mynews
+import myemoji
 import myimage
 import mygospel
 import mypost
@@ -82,6 +112,9 @@ SCORE_MODE = 200  # a quicklink you have already started typing a query for beat
 # --------------------------------------------------------------------------- #
 
 
+# An `Item` (mytypes.py) is ONE ROW of the launcher: an id, a title, a "kind" (app, command, prefix, snippet...),
+# an "action" (the key of ACTIONS in myactions.py) and a "target" (what the action works on).
+# Everything the launcher shows is an Item; everything it does is `run_item(item)`.
 def build_items(config: Config) -> list:
     """The STATIC items (they do not depend on what you typed): commands, "prefix" hints, apps.
 
@@ -89,6 +122,7 @@ def build_items(config: Config) -> list:
     pressing Enter (or Tab) writes the word and a space in the search box.
     """
     items = []
+    # 1) the commands written in the JSON ("commands": [...]) become Items one to one
     for command in config.commands:
         items.append(
             Item(
@@ -102,6 +136,9 @@ def build_items(config: Config) -> list:
                 subtitle=command.description,
             )
         )
+    # 2) the "prefix" rows: words that need more text after them. They do nothing when run ("prefix_hint"
+    #    only explains), but they appear in the list and Tab completes them. The words come from the
+    #    configuration (config.kill_word ...), so renaming `kill` to `quit` in the JSON just works.
     items.append(
         Item(
             id=f"prefix:{config.kill_word}",
@@ -122,7 +159,7 @@ def build_items(config: Config) -> list:
             action="prefix_hint",
             keywords=(config.secret_word, "api key", "token", "password"),
             complete=f"{config.secret_word} ",
-            subtitle="Values hidden; Enter shows one, Enter again copies it",
+            subtitle="Names and values; Enter copies one (secret google)",
             icon="🔑",
         )
     )
@@ -174,6 +211,7 @@ def build_items(config: Config) -> list:
             icon="▶️",
         )
     )
+    # the fixed tool words, written as a table: (word, title, subtitle, icon). One loop builds six items.
     for word, title, subtitle, icon in (
         ("about", "About mylauncher (about)", "Version, Python, configuration, hotkey: what is running now", "ℹ️"),
         ("timer", "Timer (timer <time>)", "timer 90, timer 5m, timer 1h30m: notification and sound at the end", "⏱️"),
@@ -195,6 +233,7 @@ def build_items(config: Config) -> list:
             icon="🚀",
         )
     )
+    # 3) one prefix row per quicklink (conf/quicklinks.json): "yt", "g", "wiki" ...
     for link in config.quicklinks:
         items.append(
             Item(
@@ -208,6 +247,7 @@ def build_items(config: Config) -> list:
                 icon=link.icon,
             )
         )
+    # 4) the applications: scan the folders for *.app (myapps.py). The last and the longest part of the list.
     for name, path in find_apps(config.app_folders, config.app_exclude):
         items.append(Item(id=f"app:{name}", title=f"Run {name}", kind="app", action="open_app", target=str(path), subtitle=str(path.parent)))
     return items
@@ -215,7 +255,10 @@ def build_items(config: Config) -> list:
 
 def build_snippet_items(config: Config) -> list:
     """One item per Espanso trigger (see myexpander.py). The trigger is the title (that is what you
-    search), and the text goes in `subtitle` (shown, not searched) and `target` (what gets copied)."""
+    search), and the text goes in `subtitle` (shown, not searched) and `target` (what gets copied).
+
+    Snippets come from the Espanso YAML files (myexpander.py). They are NOT part of build_items(): there can be
+    hundreds, so they are added only when you type something (see the end of _search)."""
     if not config.expander_enabled:
         return []
     scan = load_snippets(config.expander_folder, config.expander_strip_cursor)
@@ -277,6 +320,8 @@ def snippet_problem(config: Config) -> Item | None:
     return Item(id="info:snippets", title=title, kind="prefix", action="prefix_hint", complete=";", subtitle=hint, icon="⚠️", badge="Fix")
 
 
+# The "tool words": typing `timer 5m` or `explain entropy` shows ONE row that starts a tool.
+# ("deep-study" with a dash is accepted too: detect_mode normalises both spellings.)
 TOOL_WORDS = ("about", "timer", "explain", "deep_study", "deep-study", "describe_image", "describe-image", "copy_image_topic", "copy-image-topic", "news", "create_image")
 
 
@@ -350,11 +395,20 @@ def tool_items(config: Config, word: str, rest: str) -> list:
                  complete=f"{kind} {rest.strip()}", subtitle=f"opens a terminal and asks {config.ollama_model} (prompt: prompts.json)", icon=icon, badge=what)]
 
 
+# `normalize_query` exists because some commands have a SPACE or DASH in their name for humans
+# ("create image", "secret-set") but one word inside the code ("create_image"). It rewrites the start of the
+# text only, and keeps the SAME LENGTH, because the window colours the first N characters (detect_mode returns N).
+# Regular expression crib:  ^ start, (\s*) leading spaces (kept as \1), [ -] a space or a dash, (?=\s|$) "followed
+# by a space or the end" without consuming it, re.IGNORECASE ignores capitals.
 def normalize_query(query: str) -> str:
     """'create image x' and 'create-image x' become 'create_image x' (same length, so the coloured prefix stays right)."""
-    return re.sub(r"^(\s*)create[ -]image(?=\s|$)", r"\1create_image", query, flags=re.IGNORECASE)
+    query = re.sub(r"^(\s*)create[ -]image(?=\s|$)", r"\1create_image", query, flags=re.IGNORECASE)
+    query = re.sub(r"^(\s*)secret[ -]set(?=\s|$)", r"\1secret_set", query, flags=re.IGNORECASE)
+    return re.sub(r"^(\s*)emoji[ -](add|remove)(?=\s|$)", lambda m: f"{m.group(1)}emoji_{m.group(2).lower()}", query, flags=re.IGNORECASE)  # same length: 'secret-set' = 'secret_set'
 
 
+# From here: one function per "family" of rows (news, emoji). Same recipe every time:
+#   read what is cached/stored -> build a list of Item(...) -> return it. They never act, they only describe.
 def news_items(config: Config, rest: str) -> list:
     """`news`, `news games`, `news finance bitcoin`: a refresh row, then the cached headlines (never the network: it must answer at once)."""
     try:
@@ -386,11 +440,63 @@ def news_items(config: Config, rest: str) -> list:
     return rows
 
 
+def emoji_row(config: Config, entry, favorites: set, verb: str = "") -> Item:
+    """One emoji as a row. verb "" = Enter copies it; "add" / "remove" = Enter changes your favorites."""
+    star = "⭐ " if myemoji.bare(entry.char) in favorites else ""
+    detail = f"{entry.label}" + (f"  ·  {entry.words}" if entry.words else "")
+    if verb:
+        return Item(id=f"emoji-{verb}:{entry.char}", title=f"{'Add' if verb == 'add' else 'Remove'} {entry.char}  {entry.name} {'to' if verb == 'add' else 'from'} my_favorites",
+                    kind="emoji_fav", action="emoji_favorite", target=entry.char, subtitle=star + detail, icon=entry.char, badge="Favorites", complete=f"emoji-{verb} {entry.name}")
+    return Item(id=f"emoji:{entry.char}", title=f"{entry.char}  {entry.name}", kind="emoji", action="copy_emoji", target=entry.char, subtitle=star + detail,
+                icon=entry.char, badge="Emoji", complete=f"emoji {entry.name}")
+
+
+def emoji_items(config: Config, mode: str, rest: str) -> list:
+    """The rows of `emoji ...`, `emoji-add ...` and `emoji-remove ...`."""
+    path = config.emoji_favorites_file
+    favorites = {myemoji.bare(e.char) for e in myemoji.favorite_entries(path)}
+    if not myemoji.load_all():
+        return [Item(id="info:emoji", title="Emoji: the data file is missing", kind="prefix", action="prefix_hint", complete="emoji ", subtitle=f"expected {myemoji.DATA_FILE}", icon="😀", badge="Emoji")]
+    if mode == "emoji_remove":
+        entries = myemoji.favorite_entries(path)
+        entries = myemoji.search(entries, rest) if rest.strip() else entries
+        if not entries:
+            return [Item(id="info:emoji", title="Remove from my_favorites: nothing matches", kind="prefix", action="prefix_hint", complete="emoji-remove ", subtitle="type part of a name, e.g. emoji-remove brain", icon="⭐", badge="Favorites")]
+        return [emoji_row(config, e, favorites, "remove") for e in entries]
+    if mode == "emoji_add":
+        if not rest.strip():
+            return [Item(id="info:emoji", title="Add to my_favorites: which emoji?", kind="prefix", action="prefix_hint", complete="emoji-add ",
+                         subtitle="type the emoji itself (emoji-add 🧠) or part of its name (emoji-add brain)", icon="⭐", badge="Favorites")]
+        found = myemoji.chars_in(rest) if not rest.isascii() else []
+        entries = found or myemoji.search(myemoji.load_all(), rest)
+        if not entries:
+            return [Item(id="info:emoji", title=f"No emoji matches {rest!r}", kind="prefix", action="prefix_hint", complete="emoji-add ", subtitle="try another word", icon="⭐", badge="Favorites")]
+        return [emoji_row(config, e, favorites, "add") for e in entries]
+    category, entries = myemoji.select(path, rest)
+    if not category and not rest.strip():  # `emoji` alone: the categories
+        counts = myemoji.category_counts(path)
+        return [Item(id=f"info:emoji-{key}", title=label, kind="prefix", action="prefix_hint", complete=f"emoji {key} ", icon=icon, badge="Category",
+                     subtitle=f"{counts.get(key, 0)} emoji  ·  emoji {key}   (Enter opens it)") for key, (label, icon) in myemoji.CATEGORIES.items()]
+    if not entries:
+        hint = "no favorites yet: emoji-add brain" if category == myemoji.FAVORITES and not rest.split(maxsplit=1)[1:] else "nothing matches; try another word"
+        return [Item(id="info:emoji", title="Emoji: nothing found", kind="prefix", action="prefix_hint", complete="emoji ", subtitle=hint, icon="😀", badge="Emoji")]
+    return [emoji_row(config, e, favorites) for e in entries]
+
+
+# detect_mode is a long chain of `if word == ...: return (...)`. Order matters: the first match wins. It is
+# deliberately NOT clever (no tables, no classes): you can follow it with your finger.
 def detect_mode(config: Config, query: str) -> tuple:
     """(mode, n): what the launcher understood and how many characters at the start of the query
     make up the recognised command (the window paints them in colour).
 
-    mode is one of: "normal", "run", "kill", "help", "edit", "execute", "secret", "keep_secret", "quicklink", "snippets".
+    mode is one of: "normal", "run", "kill", "help", "edit", "execute", "secret", "keep_secret", "quicklink", "snippets",
+    "tool", "emoji", "emoji_add", "emoji_remove", "secret_set".
+
+    Examples (default settings):
+        detect_mode(cfg, "kill gh")     -> ("kill", 4)      the first 4 characters "kill" are painted orange
+        detect_mode(cfg, "yt lofi")     -> ("quicklink", 2)
+        detect_mode(cfg, ";pclar")      -> ("snippets", 6)  starts with a symbol: an Espanso trigger
+        detect_mode(cfg, "safari")      -> ("normal", 0)    nothing special: search everything
     """
     query = normalize_query(query)
     text = query.lstrip()
@@ -405,6 +511,10 @@ def detect_mode(config: Config, query: str) -> tuple:
         return "kill", lead + len(word)
     if word == config.help_word:
         return "help", lead + help_end(config, text)
+    if word in ("emoji", "emoji_add", "emoji_remove"):
+        return word, lead + len(word)
+    if word == "secret_set":  # secret-set NAME VALUE: writes the Keychain
+        return "secret_set", lead + len(word)
     if word == config.secret_word:
         return "secret", lead + len(word)
     if word == config.secret_edit_word:
@@ -422,6 +532,9 @@ def detect_mode(config: Config, query: str) -> tuple:
     return "normal", 0
 
 
+# `lambda item: ...` is a tiny anonymous function. Here it is the "extra points" rule handed to the ranker:
+# every time you ran an item it earns `usage_boost_per_use` points, capped at `usage_max_boost` (the cap is
+# below 20 so that a BETTER text match always beats a merely popular item).
 def _bonus(config: Config):
     """Item -> extra points for the items you use most (see myhistory.py). None when history is off."""
     if not config.usage_enabled:
@@ -438,6 +551,10 @@ def _search(config: Config, query: str, limit: int | None = None, runner=default
       * "kill gh"   the first word is the kill word: the RUNNING apps, filtered by what follows.
       * anything else: the normal search over commands, hints and apps.
     """
+    # How to read this long function: it is a list of special cases, tried from the most specific to the most
+    # general, each one ending in `return`. The LAST lines are the normal case (rank everything).
+    # `Match(item, score)` pairs an Item with how well it matched; a high fixed score (SCORE_MODE=200 or 100)
+    # puts a special row above the normal results.
     limit = config.max_results if limit is None else limit
     options = dict(ignore_accents=config.ignore_accents, fuzzy=config.fuzzy, bonus=_bonus(config))
     query = normalize_query(query)
@@ -484,6 +601,19 @@ def _search(config: Config, query: str, limit: int | None = None, runner=default
     if mode == "keep_secret":
         return [Match(edit_item(config), 100)]
 
+    if mode in ("emoji", "emoji_add", "emoji_remove"):
+        return [Match(i, 100) for i in emoji_items(config, mode, rest)[: config.max_browse_results]]
+
+    if mode == "secret_set":  # secret-set google my password  ->  one row; Enter saves it in the Keychain
+        name, _, value = rest.strip().partition(" ")
+        value = value.strip()
+        if not name or not value or not NAME_RE.match(name):
+            hint = "type: secret-set NAME VALUE   (for example: secret-set google my password)" if not name else (f"{name!r} is not a good name (letters, digits, _ . -)" if not NAME_RE.match(name) else f"now type the value of {name}")
+            return [Match(Item(id="info:secret-set", title="Save a secret in the Keychain", kind="prefix", action="prefix_hint", complete="secret-set ", subtitle=hint, icon="🔐", badge="Keychain"), 100)]
+        item = Item(id="secret:*set*", title=f"Save {name} in the Keychain", kind="secret", action="secret_set", target=json.dumps({"name": name, "value": value}),
+                    subtitle=f"{name} = {value}   (Enter saves it; the old value is replaced)", icon="🔐", badge="Keychain", complete=f"secret-set {name} ")
+        return [Match(item, 100)]
+
     if mode == "secret":  # names and comments are searched, never the values
         items = build_secret_items(config, runner)
         if not rest.strip():
@@ -524,6 +654,7 @@ def _search(config: Config, query: str, limit: int | None = None, runner=default
             for m in matches
         ]
 
+    # ---- the normal case: rank every command, hint and app against what was typed ----
     items = build_items(config)
     if query.strip():  # snippets can be many: they appear only when you type something
         items += build_snippet_items(config)
@@ -538,28 +669,55 @@ def _search(config: Config, query: str, limit: int | None = None, runner=default
 
 
 def _print_json(data) -> None:
+    """The one way every command writes JSON: indented (readable), accents and emoji kept as they are (ensure_ascii=False)."""
     print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
 # --------------------------------------------------------------------------- #
 # Step B: one function per sub-command                                        #
 # --------------------------------------------------------------------------- #
+#
+# WHAT EVERY cmd_* LOOKS LIKE (learn this shape once, then all ~40 are easy):
+#
+#     def cmd_something(args, config, runner=default_runner, **_) -> int:
+#         ...do the work with what is in `args` (the words typed after the sub-command) and `config`...
+#         ...print the answer: human text, or JSON when args.json is True...
+#         return 0            # 0 = success, 1 = "nothing found / failed", 2 = "you used it wrongly"
+#
+#   args    a Namespace made by argparse (Step C): args.query is a list of words, args.json a bool...
+#   config  the checked, read-only Config (myconfig.py)
+#   **_     "swallow" every other keyword: main() passes ALL the injected helpers to every command and each
+#           command keeps only the ones it needs.
+#   The int returned becomes the exit code of the whole program (`echo $?` in a terminal shows it),
+#   which is how scripts and the window learn whether it worked.
+#
+# Reading order in this part: list, search, complete, run (the important one), help, emoji, secret, timer, AI tools,
+# news, create-image, the daily-gospel family, then the maintenance commands (crash, report, history, doctor).
 
 
 def cmd_list(args, config: Config, **_) -> int:
+    """`ml list`: every static item (commands, hints, apps, snippets), one per line, or JSON with --json."""
     items = build_items(config) + build_snippet_items(config)
     if args.json:
         _print_json([item.to_dict() for item in items])
         return 0
-    width = max((len(i.id) for i in items), default=0)
+    width = max((len(i.id) for i in items), default=0)  # the widest id, so the titles line up in a column
     for item in items:
+        # f"{x:<10}" = "left-align x in a field 10 wide". Here the width is itself a variable: {item.id:<{width}}
         print(f"{item.id:<{width}}  {item.title}")
     print(f"\n{len(items)} item(s)")
     return 0
 
 
 def cmd_search(args, config: Config, runner=default_runner, **_) -> int:
-    query = " ".join(args.query)
+    """`ml search WORDS`: what the window calls on every keystroke.
+
+    With --json it prints ONE object the window understands:
+        {"query": "yt lofi", "completion": "yt lofi", "mode": "quicklink", "highlight": 2, "results": [ {item...}, ... ]}
+    `completion` is what Tab would write, `mode`+`highlight` tell the window how many letters to paint orange.
+    Exit code 1 means "no match" but the JSON is still printed (the window reads stdout whatever the code).
+    """
+    query = " ".join(args.query)  # argparse gave us a LIST of words; join them back into the text the user typed
     matches = _search(config, query, args.limit, runner)
     completion = complete(query, matches, config.ignore_accents)
     if args.json:
@@ -585,6 +743,7 @@ def cmd_search(args, config: Config, runner=default_runner, **_) -> int:
 
 
 def cmd_complete(args, config: Config, runner=default_runner, **_) -> int:
+    """`ml complete obs` -> `run obsidian`: only the text Tab would write (see mysearch.complete)."""
     query = " ".join(args.query)
     completion = complete(query, _search(config, query, runner=runner), config.ignore_accents)
     if args.json:
@@ -595,6 +754,20 @@ def cmd_complete(args, config: Config, runner=default_runner, **_) -> int:
 
 
 def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.sleep, spawn=default_spawn, **_) -> int:
+    """`ml run WORDS` or `ml run --id ID --text WORDS`: do something. This is the Enter key.
+
+    Four steps, numbered in the code:
+      1. WHICH ITEM?   by exact id (the window sends the id of the highlighted row) or the best match of the words.
+      2. CONFIRM?      items with confirm=True (restart, shutdown, publish...) ask "are you sure?" - except with
+                       --yes, --dry-run, or --json (JSON mode never asks: the window asks and re-sends --yes).
+      3. DO IT         build RunOptions from the Config, then run_item(...) from myactions.py.
+      4. REMEMBER IT   count the use (so your favourites rise in the list) and print the result.
+    Exit code: 0 done, 1 failed or cancelled, 2 bad usage.
+
+    Why search again with --text when an id is given? Some items only exist for the text that created them
+    ("Kill Safari" exists while Safari runs; "Search youtube for lofi" exists for the query "yt lofi"), so the
+    id alone is not enough to rebuild them.
+    """
     typed = args.text if args.text is not None else " ".join(args.query)
 
     # 1. Which item? An exact --id, or the best match for the words given (what Enter does).
@@ -625,7 +798,9 @@ def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.s
             print("cancelled")
             return 1
 
-    # 3. Do it.
+    # 3. Do it. RunOptions (myactions.py) is a PACKAGE of settings for the actions; this copies, one by one,
+    #    the settings that actions need from the Config. Long and boring on purpose: when you add an action
+    #    that needs a setting, you add one line here (and one field in RunOptions).
     options = RunOptions(
         force=args.force,
         grace=config.kill_grace_seconds,
@@ -636,6 +811,9 @@ def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.s
         notify_method=config.notify_method,
         clear_seconds=config.secret_clear_seconds,
         secret_notify_value=config.secret_notify_value,
+        secret_file=str(config.secret_file),
+        emoji_favorites_file=str(config.emoji_favorites_file),
+        secret_service=config.secret_service,
         timer_folder=config.timer_folder,
         timer_sound=config.timer_sound,
         timer_repeat=config.timer_repeat,
@@ -672,20 +850,23 @@ def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.s
     )
     result = run_item(item, runner=runner, dry_run=args.dry_run, options=options)
 
-    # 4. Remember it (for "most used first"), but only real, successful runs of real items.
-    if result.ok and not args.dry_run and item.kind not in ("prefix", "help", "secret"):
+    # 4. Remember it (for "most used first"), but only real, successful runs of real items. Secrets and emoji are
+    #    not recorded: a usage file must never reveal which secret you copy.
+    if result.ok and not args.dry_run and item.kind not in ("prefix", "help", "secret", "emoji", "emoji_fav"):
         History(config.usage_file, config.usage_enabled).record(item.id)
 
     if args.json:
         shown = item.to_dict()
-        if item.kind == "secret":  # the value must not travel in the output
-            shown.update(target="(hidden)", detail="(hidden)")
+        if item.kind == "secret":  # the value must not travel in the output (it would end up in logs and the window's memory)
+            shown.update(target="(hidden)", detail="(hidden)", subtitle="(hidden)")
         _print_json({"item": shown, "result": result.to_dict()})
     else:
         print(f"{item.title}: {result.message}")
     return 0 if result.ok else 1
 
 
+# `ml help` shows the same rows as typing `help` in the window. The rows are built in myhelp.py from your aliases,
+# functions, AeroSpace config, skills and scripts; this function only prints them.
 def cmd_help(args, config: Config, runner=default_runner, **_) -> int:
     """ml help [topic] [words...]: the same lists the launcher shows after typing `help`."""
     words = list(args.query)
@@ -707,11 +888,18 @@ def cmd_help(args, config: Config, runner=default_runner, **_) -> int:
     return 0
 
 
+# A secret's NAME must look like a shell variable: a letter or _, then letters, digits, _ . -  (GOOGLE_API_KEY, my-token).
+# That keeps it safe inside a file line (NAME=value) and a Keychain account name.
 NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
 
 def read_with_stars(prompt: str) -> str:
-    """Read one line from the terminal showing * for every character typed (Backspace works). Falls back to input()."""
+    """Read one line from the terminal showing * for every character typed (Backspace works). Falls back to input().
+
+    A terminal normally waits for Enter and echoes what you type ("cooked mode"). `termios`/`tty.setcbreak` switch it
+    to "cbreak": we get each key at once and decide ourselves what to show. The `finally:` ALWAYS puts the terminal
+    back as it was, even if you press Ctrl-C, otherwise your shell would stay broken (no echo).
+    """
     try:
         import termios
         import tty
@@ -744,6 +932,129 @@ def read_with_stars(prompt: str) -> str:
     return "".join(chars)
 
 
+# The three emoji commands follow the same flow: find entries (myemoji) -> choose one (by emoji, exact name, or a
+# number from a short list) -> change/copy -> print one line per emoji. `ask` is injected so tests can "type" the number.
+def cmd_emoji(args, config: Config, runner=default_runner, **_) -> int:
+    """ml emoji [CATEGORY] [WORDS]: the same lists as the launcher word `emoji`. --copy puts the first one in the clipboard."""
+    text = " ".join(args.query).strip()
+    category, entries = myemoji.select(config.emoji_favorites_file, text)
+    if not category and not text:
+        counts = myemoji.category_counts(config.emoji_favorites_file)
+        for key, (label, icon) in myemoji.CATEGORIES.items():
+            print(f"{icon}  {key:<12} {label:<20} {counts.get(key, 0):>4} emoji")
+        print("\nExamples:  ml emoji smileys   ·   ml emoji brain   ·   ml emoji my_favorites   ·   ml emoji smileys happy   ·   ml emoji-add 🧠")
+        return 0
+    if not entries:
+        print("nothing found" + ("; add favorites with:  ml emoji-add brain" if category == myemoji.FAVORITES else ""), file=sys.stderr)
+        return 1
+    shown = entries if args.limit == 0 else entries[: args.limit]
+    if args.json:
+        _print_json([{"emoji": e.char, "name": e.name, "category": e.category, "words": e.words} for e in shown])
+    else:
+        for e in shown:
+            print(f"{e.char}  {e.name}   [{e.label}]")
+        if len(shown) < len(entries):
+            print(f"... {len(entries) - len(shown)} more (add words to narrow it, or --limit 0 for all)")
+    if args.copy:
+        done = runner(["pbcopy"], shown[0].char)
+        print(f"{shown[0].char} copied to the clipboard" if done.returncode == 0 else "could not copy (pbcopy failed)", file=sys.stderr)
+        return 0 if done.returncode == 0 else 1
+    return 0
+
+
+def _pick_emoji(entries, words: str, ask, verb: str):
+    """One entry from a list: the only one, an exact name, or the one you choose by number (None = cancelled)."""
+    if len(entries) == 1:
+        return entries[0]
+    exact = [e for e in entries if e.name == words.lower().strip()]
+    if len(exact) == 1:
+        return exact[0]
+    for number, e in enumerate(entries[:20], 1):
+        print(f"{number:>2}  {e.char}  {e.name}   [{e.label}]")
+    if len(entries) > 20:
+        print(f"    ... {len(entries) - 20} more: use more words")
+    try:
+        answer = ask(f"Which one to {verb}? number (Enter = cancel): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+    if answer.isdigit() and 1 <= int(answer) <= min(len(entries), 20):
+        return entries[int(answer) - 1]
+    print("cancelled", file=sys.stderr)
+    return None
+
+
+def cmd_emoji_add(args, config: Config, ask=input, **_) -> int:
+    """ml emoji-add 🧠   |   ml emoji-add brain: put an emoji in my_favorites (by the emoji itself, or by words, then a number if several)."""
+    words = " ".join(args.query).strip()
+    if not words:
+        print("error: which emoji?  ml emoji-add 🧠   or   ml emoji-add brain", file=sys.stderr)
+        return 2
+    chosen = myemoji.chars_in(words) if not words.isascii() else []
+    if not chosen:
+        found = myemoji.search(myemoji.load_all(), words)
+        if not found:
+            print(f"error: no emoji matches {words!r}", file=sys.stderr)
+            return 1
+        pick = _pick_emoji(found, words, ask, "add")
+        if pick is None:
+            return 1
+        chosen = [pick]
+    for entry in chosen:
+        added = myemoji.add_favorite(config.emoji_favorites_file, entry.char)
+        print(f"{entry.char}  {entry.name}: " + ("added to my_favorites" if added else "was already in my_favorites"))
+    return 0
+
+
+def cmd_emoji_remove(args, config: Config, ask=input, **_) -> int:
+    """ml emoji-remove brain: take an emoji out of my_favorites."""
+    words = " ".join(args.query).strip()
+    favorites = myemoji.favorite_entries(config.emoji_favorites_file)
+    chosen = myemoji.chars_in(words) if words and not words.isascii() else []
+    if not chosen:
+        found = myemoji.search(favorites, words) if words else favorites
+        if not found:
+            print(f"error: nothing in my_favorites matches {words!r}", file=sys.stderr)
+            return 1
+        pick = _pick_emoji(found, words, ask, "remove")
+        if pick is None:
+            return 1
+        chosen = [pick]
+    for entry in chosen:
+        removed = myemoji.remove_favorite(config.emoji_favorites_file, entry.char)
+        print(f"{entry.char}  {entry.name}: " + ("removed from my_favorites" if removed else "was not in my_favorites"))
+    return 0
+
+
+# SECRETS in one paragraph: the VALUES live only in the macOS Keychain. secrets.env lists the NAMES (and notes) so you
+# can see and edit them. `ml secret NAME` prints exactly the value and nothing else, so  $(ml secret google)  works in
+# a shell. Nothing here logs or echoes a value except the commands whose job is to print it. See docs/secrets.md.
+def cmd_secret(args, config: Config, runner=default_runner, **_) -> int:
+    """ml secret [NAME]: print the value of NAME as it is (nothing else, so  $(ml secret google)  works); without NAME, every pair.
+
+    Values come from the macOS Keychain. Changes typed in the secrets file (keep_secret) are moved into the Keychain first."""
+    secrets, problem = read_secrets(config.secret_file, runner, config.secret_service)
+    name = (args.name or "").strip()
+    if not name:
+        if not secrets:
+            print(f"no secrets yet ({problem or 'the file is empty'}). Add one:  ml secret-set NAME VALUE", file=sys.stderr)
+            return 1
+        print(secret_table(secrets))
+        return 0
+    wanted = [s for s in secrets if s.name == name] or [s for s in secrets if s.name.lower() == name.lower()]
+    if wanted:
+        if wanted[0].problem:
+            print(f"error: {name}: {wanted[0].problem}", file=sys.stderr)
+            return 1
+        print(wanted[0].value)
+        return 0
+    value, why = keychain_get(runner, config.secret_service, name)  # not in the file, but maybe in the Keychain
+    if value:
+        print(value)
+        return 0
+    print(f"error: no secret called {name!r}. Names: {', '.join(s.name for s in secrets) or '(none)'}. Add it:  ml secret-set {name} VALUE", file=sys.stderr)
+    return 1
+
+
 def cmd_secret_set(args, config: Config, ask=input, **_) -> int:
     """ml secret-set NAME [VALUE] [--notes TEXT]: save a value in the macOS Keychain and list the name.
 
@@ -753,7 +1064,7 @@ def cmd_secret_set(args, config: Config, ask=input, **_) -> int:
     if not NAME_RE.match(name):
         print(f"error: {name!r} is not a good name (letters, digits, _ . -)", file=sys.stderr)
         return 2
-    value = args.value
+    value = " ".join(args.value) if args.value else None
     mode = config.secret_input_echo
     if value is None and mode != "hidden":
         try:
@@ -764,6 +1075,8 @@ def cmd_secret_set(args, config: Config, ask=input, **_) -> int:
         if not value:
             print("error: an empty value was not saved", file=sys.stderr)
             return 1
+    # `security` is the macOS Keychain program: -U update if it exists, -s service (a folder-like label), -a account
+    # (= the secret's name), -w the password. With -w LAST and no value, `security` asks for it itself and hides it.
     command = ["security", "add-generic-password", "-U", "-s", config.secret_service, "-a", name, "-w"]  # -w last: it asks, hidden
     if value is None:
         print(f"Saving {name} in the Keychain (service {config.secret_service}). Type or paste the value when asked (it is hidden).")
@@ -778,9 +1091,10 @@ def cmd_secret_set(args, config: Config, ask=input, **_) -> int:
         print(f"error: the Keychain did not save it (exit code {code})", file=sys.stderr)
         return 1
     added = add_name(config.secret_file, name)
+    scrub_names(config.secret_file, [name])  # an old plain value on that line must not overwrite the new Keychain value later
     if args.notes is not None:
         set_notes(config.secret_file, name, args.notes.replace("\\n", "\n"))
-    print("Saved." + (f" Added {name}=keychain to {config.secret_file}." if added else "") + (" private_notes saved." if args.notes else ""))
+    print("Saved." + (f" Added {name}= to {config.secret_file}." if added else "") + (" private_notes saved." if args.notes else ""))
     return 0
 
 
@@ -803,7 +1117,13 @@ def cmd_secret_notes(args, config: Config, **_) -> int:
 
 
 def summarize_crash(text: str, limit: int = 25) -> str:
-    """A macOS crash report (.ips = two JSON documents, or an old .crash text) -> the few lines that matter."""
+    """A macOS crash report (.ips = two JSON documents, or an old .crash text) -> the few lines that matter.
+
+    Used by `ml crash`. A crash report is thousands of lines; we keep: which app, which macOS, the exception, and
+    the first `limit` frames (function calls) of the thread that crashed. The `try/except` is a safety net: if the
+    file is not in the expected shape we print its first 60 lines instead of failing - a diagnostic tool must not
+    crash while diagnosing a crash.
+    """
     try:
         head, _, body = text.partition("\n")
         data = json.loads(body)
@@ -827,7 +1147,7 @@ def summarize_crash(text: str, limit: int = 25) -> str:
 
 def cmd_about(args, config: Config, runner=default_runner, **_) -> int:
     """ml about: which mylauncher is this (version, files, Python, configuration, hotkey...)."""
-    from myhelp import load_rows
+    from myhelp import load_rows  # imported HERE, not at the top: only this command needs it (keeps start-up fast)
 
     rows, _problem = load_rows(config, "about", runner)
     if args.json:
@@ -838,7 +1158,12 @@ def cmd_about(args, config: Config, runner=default_runner, **_) -> int:
 
 
 def cmd_timer(args, config: Config, runner=default_runner, spawn=default_spawn, **_) -> int:
-    """ml timer 90 | 5m | 1h30m | 1:30: start a timer; a notification and a sound when it ends."""
+    """ml timer 90 | 5m | 1h30m | 1:30: start a timer; a notification and a sound when it ends.
+
+    Three sub-forms: `timer list`, `timer cancel [ID|all]`, and `timer <time>`. The time is parsed by
+    mytimer.parse_duration (returns seconds, or None if it is not a time: exit code 2 = "you used it wrongly").
+    Starting reuses the `timer` ACTION of myactions.py, exactly as the window would: one implementation, two doors.
+    """
     text = " ".join(args.time)
     if text.strip().lower() in ("list", "ls"):
         found = mytimer.running(config.timer_folder, time.time())
@@ -867,6 +1192,9 @@ def cmd_timer(args, config: Config, runner=default_runner, spawn=default_spawn, 
     return 0 if result.ok else 1
 
 
+# The AI commands (explain, deep-study, describe-image, find-image, copy-image-topic, daily-briefing) are THIN: they
+# collect arguments and call myassistant.py / mybriefing.py, which talk to the local Ollama model. `opener` is the
+# function that makes an HTTP request (real: urllib's urlopen; tests: a fake that returns a canned answer).
 def _cmd_ai(kind: str, text: str, config: Config, spawn, sleep, opener, refresh: bool = False, **_) -> int:
     return myassistant.ask(config, kind, text, opener=opener or myassistant.urllib.request.urlopen, spawn=spawn, sleep=sleep, refresh=refresh)
 
@@ -937,7 +1265,12 @@ def cmd_daily_briefing(args, config: Config, runner=default_runner, spawn=defaul
 
 
 def cmd_news(args, config: Config, fetcher=None, **_) -> int:
-    """ml news [CATEGORY] [words]: the newest headlines of your feeds (conf/feeds.json), cached for news.cache_minutes."""
+    """ml news [CATEGORY] [words]: the newest headlines of your feeds (conf/feeds.json), cached for news.cache_minutes.
+
+    Flow: load the feeds file -> split the typed words into (category, search words) -> get() from the cache or the
+    network -> filter by words and days -> print. A feed that does not answer is REPORTED but does not stop the others
+    (`got["failed"]`). `fetcher` is injected so tests never touch the network.
+    """
     try:
         categories = mynews.load_feeds(config.news_feeds_file)
         default = config.news_default if config.news_default in categories else sorted(categories)[0]
@@ -972,6 +1305,10 @@ def cmd_news(args, config: Config, fetcher=None, **_) -> int:
 
 def cmd_create_image(args, config: Config, runner=default_runner, opener=None, **_) -> int:
     """ml create-image PROMPT [FOLDER]: a picture from a prompt (mflux, Ollama or OpenRouter), saved in FOLDER."""
+    # Normally `runner` CAPTURES a program's output. For a slow image model we want the progress bar to appear in the
+    # terminal, so in real life we swap in a runner that does not capture (except for the small `security`/`open` helpers).
+    # A function defined INSIDE another function (a "closure") is fine in Python; `_real=default_runner` freezes the
+    # real runner as a default argument so the inner function can still reach it.
     if runner is default_runner:  # in a terminal: let the model's progress bar show (the output is not captured)
         def runner(command, input_text=None, _real=default_runner):
             if command and command[0] in ("security", "open"):
@@ -998,6 +1335,7 @@ def cmd_create_image(args, config: Config, runner=default_runner, opener=None, *
     return 0
 
 
+# `_live_runner` is the same idea as in cmd_create_image, shared by the daily-gospel commands (they also run slow image models).
 def _live_runner(runner):
     """In a terminal let the image model's progress show; small helper programs keep their captured output."""
     if runner is not default_runner:
@@ -1012,6 +1350,19 @@ def _live_runner(runner):
     return live
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# THE DAILY GOSPEL FAMILY - one pipeline, four commands, each one able to make the previous steps if they are missing:
+#
+#   ml daily-gospel-image     the Gospel -> theme + image prompt (Ollama) -> pictures
+#   ml daily-gospel           the guided prayer (Ollama) + pictures, saved as DATE-gospel.json/.md/.html   (needs the above)
+#   ml daily-gospel-post      a Hugo post DATE.md + pictures uploaded to the server (ssh/scp)               (needs daily-gospel)
+#   ml daily-gospel-facebook  the Facebook text in the clipboard, the browser pastes it; YOU press Post     (needs daily-gospel)
+#
+# The "state of the day" is a small JSON file (myprayer.load_day / save_day). Every command first asks it "is the
+# prayer done? are the pictures done?" and only does what is missing: that is why running a command twice is safe
+# (idempotent) and why an interrupted run loses nothing. See docs/prayer.md, post.md, facebook.md.
+# `today=` is injectable (tests pass a fixed date); `out=` is where progress messages go (stderr, so stdout stays clean for JSON).
+# ---------------------------------------------------------------------------------------------------------------
 def cmd_daily_gospel(args, config: Config, runner=default_runner, spawn=default_spawn, sleep=time.sleep, opener=None, fetcher=None, today=None, **_) -> int:
     """ml daily-gospel: EVERYTHING for today's Gospel, once a day.
 
@@ -1021,6 +1372,8 @@ def cmd_daily_gospel(args, config: Config, runner=default_runner, spawn=default_
     are missing, only they are made. The files are written after the prayer and again after the pictures: an interrupted run keeps the prayer.
     --plain: only the feed's reading (no model, no files). --no-images: no pictures. --json: print the JSON. --open: open the page.
     """
+    # getattr(args, "x", default): "args.x if it exists, else default". Used because other commands build a partial
+    # Namespace and call this function directly (see cmd_daily_gospel_post), without every option present.
     fetcher = fetcher or getattr(args, "fetcher", None) or mygospel.fetch
     if args.plain:
         try:
@@ -1036,6 +1389,7 @@ def cmd_daily_gospel(args, config: Config, runner=default_runner, spawn=default_
     folder = Path(getattr(args, "folder", "") or config.gospel_image_folder).expanduser()
     count = getattr(args, "count", 0) or config.gospel_image_count
     want_images = not getattr(args, "no_images", False)
+    # --- 1. what already exists for today? (skipped entirely with --refresh) ---
     data = None if getattr(args, "refresh", False) else myprayer.load_day(folder, day)
     guided = dict(data) if data and myprayer.prayer_done(data) else None
     files = myprayer.day_files(folder, day)
@@ -1052,6 +1406,7 @@ def cmd_daily_gospel(args, config: Config, runner=default_runner, spawn=default_
             myprayer.open_page(files["html"], config.browser_command, runner)
         return 0
 
+    # --- 2. the prayer: fetch the reading, then ask the local model to compose the guided prayer ---
     try:
         if guided is None:
             gospel = mygospel.get_gospel(config, fetcher)
@@ -1071,10 +1426,12 @@ def cmd_daily_gospel(args, config: Config, runner=default_runner, spawn=default_
     if getattr(args, "refresh", False) and data:
         for old in data.get("images") or []:
             Path(old).unlink(missing_ok=True)
+    # --- 3. save the prayer BEFORE making the pictures: pictures take minutes and may fail; the prayer must survive ---
     if not args.json:
         print(myprayer.render(guided))
     myprayer.save_day(folder, day, guided)
     print(f"(saved in {folder}: {files['md'].name}, {files['json'].name}, {files['html'].name})", file=sys.stderr, flush=True)
+    # --- 4. the pictures (a failure here is reported but exit code 1 keeps the saved prayer) ---
     status = 0
     if want_images:
         try:
@@ -1109,9 +1466,12 @@ def cmd_daily_gospel_post(args, config: Config, runner=default_runner, spawn=def
     today = today or _date.today()
     day = today.strftime("%Y-%m-%d")
     folder = Path(config.gospel_image_folder).expanduser()
+    # `replace(config, post_draft=True)` = a COPY of the frozen Config with one field changed, for this run only.
     if getattr(args, "draft", False):
         config = replace(config, post_draft=True)
     data = myprayer.load_day(folder, day)
+    # Step 1 of the post: make sure the prayer and the pictures exist. If not, call cmd_daily_gospel ourselves with a
+    # hand-made Namespace (the object argparse would have built) - one command re-using another, no code copied.
     if not (myprayer.prayer_done(data) and myprayer.images_done(data, folder, config.gospel_image_count)):
         print("today's prayer or pictures are not complete: making them first (ml daily-gospel) ...", file=out, flush=True)
         inner = argparse.Namespace(json=False, plain=False, no_images=False, refresh=False, open=False, no_open=True, count=0, folder="", backend="", fetcher=getattr(args, "fetcher", None))
@@ -1121,6 +1481,7 @@ def cmd_daily_gospel_post(args, config: Config, runner=default_runner, spawn=def
             print("error: the prayer or the pictures could not be completed, so nothing is posted.", file=sys.stderr)
             return 1
     data["sources"] = [list(s) for s in (config.gospel_sources or myprayer.DEFAULT_SOURCES)]  # today's list of links, also for a prayer made yesterday
+    # Step 2: the title and description come from the model ONCE and are kept in the day's .json (a second run reuses them).
     if not data.get("post") or getattr(args, "new_title", False):
         print("asking the local model for a title and a description ...", file=out, flush=True)
         data["post"] = mypost.make_meta(config, data, opener or myassistant.urllib.request.urlopen, spawn, sleep)
@@ -1135,6 +1496,8 @@ def cmd_daily_gospel_post(args, config: Config, runner=default_runner, spawn=def
     if getattr(args, "no_upload", False):
         print("(--no-upload: nothing was sent to the server)", file=out, flush=True)
         return 0
+    # Step 3: upload. plan_upload builds the list of ssh/scp commands (pure data), upload() runs them. With --dry-run
+    # the plan is only PRINTED - the safest way to see what will be sent before sending it.
     plan = mypost.plan_upload(config, images, post)
     dry = getattr(args, "dry_run", False)
     live = _live_runner(runner) if not dry else runner
@@ -1171,6 +1534,8 @@ def cmd_daily_gospel_facebook(args, config: Config, runner=default_runner, spawn
             print("error: the prayer or the pictures could not be completed, so nothing is posted.", file=sys.stderr)
             return 1
     data["sources"] = [list(s) for s in (config.gospel_sources or myprayer.DEFAULT_SOURCES)]  # today's list of links, also for a prayer made yesterday
+    # The Facebook text is saved next to the prayer (so you can read or paste it by hand), then myfacebook.run does the
+    # browser part. It NEVER clicks "Post": that stays your decision (see docs/facebook.md).
     (folder / f"{day}-facebook.txt").write_text(myfacebook.facebook_text(data), encoding="utf-8")
     try:
         return myfacebook.run(config, data, [Path(i) for i in data["images"]], runner, ask=ask, out=out, sync_playwright=sync_playwright,
@@ -1204,6 +1569,7 @@ def cmd_daily_gospel_image(args, config: Config, runner=default_runner, spawn=de
     return 0
 
 
+# ---- maintenance commands: crash, notify-test, report, history, config, doctor ----------------------------------
 def cmd_crash(args, config: Config, **_) -> int:
     """ml crash: the newest "Python quit unexpectedly" report of macOS, summarised, plus the end of the app log."""
     folder = Path("~/Library/Logs/DiagnosticReports").expanduser()
@@ -1223,7 +1589,12 @@ def cmd_crash(args, config: Config, **_) -> int:
 
 
 def cmd_espanso_config(args, config: Config, **_) -> int:
-    """ml espanso-config [--install]: keep Espanso from expanding triggers typed INTO the launcher window."""
+    """ml espanso-config [--install]: keep Espanso from expanding triggers typed INTO the launcher window.
+
+    Espanso (a text expander) watches the keyboard everywhere. If you type `;pclarify` in the launcher's search box,
+    Espanso would expand it IN the box instead of letting the launcher list it. The file this command prints/installs
+    tells Espanso to ignore the launcher window (matched by its title, `window.title`). See myespanso.py.
+    """
     text = myespanso.config_text(config.window_title)
     if args.install:
         ok, message = myespanso.install(config.expander_folder, config.window_title)
@@ -1236,7 +1607,11 @@ def cmd_espanso_config(args, config: Config, **_) -> int:
 
 
 def cmd_notify_test(args, config: Config, runner=default_runner, **_) -> int:
-    """Send a test notification and explain what to check when it does not appear."""
+    """Send a test notification and explain what to check when it does not appear.
+
+    A good habit for anything that "silently does nothing": give the user a command that PROVES it works and
+    explains the usual causes of failure (here macOS settings the program cannot read for itself).
+    """
     name, path = resolve_notifier(config.notify_method)
     print(f"method: {config.notify_method}  ->  using {name}" + (f" ({path})" if path else ""))
     ok, detail = send_notification(runner, config.notify_method, "mylauncher", "Test", "If you can read this, notifications work.")
@@ -1254,7 +1629,13 @@ def cmd_notify_test(args, config: Config, runner=default_runner, **_) -> int:
 
 
 def cmd_report(args, config: Config | None = None, config_error: str = "", runner=default_runner, **_) -> int:
-    """Everything worth pasting into a bug report, in one go (nothing secret: no file contents but the logs)."""
+    """Everything worth pasting into a bug report, in one go (nothing secret: no file contents but the logs).
+
+    It runs `cmd_doctor` but CAPTURES its output: `contextlib.redirect_stdout(buffer)` temporarily points `print` at an
+    in-memory text buffer (io.StringIO), so we can re-print it under our own heading. A nested function (`section`)
+    keeps the headings uniform. Note it takes `config=None` plus `config_error`: it must work even when the
+    configuration is BROKEN (that is exactly when you need a report).
+    """
     import contextlib
     import io
     import platform
@@ -1302,6 +1683,7 @@ def cmd_report(args, config: Config | None = None, config_error: str = "", runne
 
 
 def cmd_history(args, config: Config, **_) -> int:
+    """`ml history [--limit N] [--clear] [--json]`: the items you use most (what makes them rise in the list), see myhistory.py."""
     history = History(config.usage_file, True)
     if args.clear:
         history.clear()
@@ -1332,6 +1714,7 @@ def _fail(args, message: str, code: int = 1) -> int:
 
 
 def cmd_config(args, config: Config, **_) -> int:
+    """`ml config`: print the settings file in use (which one is decided by find_config_path) - or as JSON with its path."""
     text = config.path.read_text(encoding="utf-8")
     if args.json:
         _print_json({"path": str(config.path), "config": json.loads(text)})
@@ -1342,7 +1725,12 @@ def cmd_config(args, config: Config, **_) -> int:
 
 
 def cmd_doctor(args, config: Config | None = None, config_error: str = "", **_) -> int:
-    """Check the installation. ✔ = fine, ! = worth a look, ✘ = broken."""
+    """Check the installation. ✔ = fine, ! = worth a look, ✘ = broken.
+
+    The pattern: build a list of (symbol, sentence) pairs, one per check, then print them all at the end. Each check is
+    an `if`: "is this folder there? is that program installed?". A check never raises; it records a "!" and goes on, so one
+    problem does not hide the next. This is the first command to run when "something does not work".
+    """
     results = []  # (symbol, text)
 
     ok = sys.version_info >= (3, 11)
@@ -1424,6 +1812,7 @@ def cmd_doctor(args, config: Config | None = None, config_error: str = "", **_) 
         policy = "force quit automatically" if config.kill_auto_force else "asks before force quit"
         results.append(("✔", f"kill: '{config.kill_word} <name>' waits {config.kill_grace_seconds} s, then {policy}"))
 
+    # ---- checks that do not need the configuration: the scripts and the macOS programs we call ----
     root = Path(__file__).resolve().parent.parent
     for relative in ("cli/ml", "app/mylauncher-app", "app/mylauncher-autostart"):
         script = root / relative
@@ -1447,6 +1836,23 @@ def cmd_doctor(args, config: Config | None = None, config_error: str = "", **_) 
 
 
 def make_parser() -> argparse.ArgumentParser:
+    """Describe the whole command line: every sub-command, its words and its options. Nothing runs here.
+
+    `argparse` (standard library) is a small language for this. The vocabulary, in the order you meet it:
+      add_parser("name", help=...)    declare a sub-command:   ml name ...
+      add_argument("query", nargs="*")  a POSITIONAL word list ("*" = zero or more, "+" = one or more, "?" = optional)
+      add_argument("--json", action="store_true")   an OPTION that is a switch: absent = False, present = True
+      add_argument("--limit", type=int)             an option with a VALUE, converted to an int
+      choices=[...]                  only these values are accepted (others give a clear error and exit code 2)
+      aliases=["daily_gospel"]       a second name for the same sub-command (underscores for typing speed)
+      help=argparse.SUPPRESS         accepted but hidden from --help (old options kept so old habits still work)
+      set_defaults(func=cmd_x)       "when this sub-command is chosen, args.func is cmd_x"  <- the link to Step B
+    `parse_args(argv)` then returns a Namespace: args.command, args.query, args.json, args.func ...
+    The `help=` texts you write here are what `ml COMMAND --help` prints, so they are real documentation.
+
+    HOW TO ADD A SUB-COMMAND: (1) write cmd_x in Step B, (2) declare it here with set_defaults(func=cmd_x),
+    (3) document it in docs/use_cli.md and add an EXAMPLE in mycatalog.py (a test checks both), (4) add a test.
+    """
     # Options shared by every sub-command live in a "parent" parser, so we write them once.
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--config", metavar="FILE", help="configuration file (default: conf/myconfiguration.json)")
@@ -1482,9 +1888,23 @@ def make_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_history)
 
     sub.add_parser("config", parents=[common], help="where the settings are and what they say").set_defaults(func=cmd_config)
+    emoji_p = sub.add_parser("emoji", parents=[common], help="find an emoji by category or name (my_favorites, smileys, people, ...)")
+    emoji_p.add_argument("query", nargs="*", help="a category and/or words: smileys happy | brain | my_favorites")
+    emoji_p.add_argument("--copy", action="store_true", help="copy the first emoji of the list to the clipboard")
+    emoji_p.add_argument("--limit", type=int, default=50, help="how many to show (0 = all)")
+    emoji_p.set_defaults(func=cmd_emoji)
+    emoji_add = sub.add_parser("emoji-add", parents=[common], help="add an emoji to my_favorites (the emoji itself or words)")
+    emoji_add.add_argument("query", nargs="*", help="🧠  or  brain")
+    emoji_add.set_defaults(func=cmd_emoji_add)
+    emoji_rm = sub.add_parser("emoji-remove", parents=[common], help="remove an emoji from my_favorites")
+    emoji_rm.add_argument("query", nargs="*", help="🧠  or  brain")
+    emoji_rm.set_defaults(func=cmd_emoji_remove)
+    secret_get = sub.add_parser("secret", parents=[common], help="print a secret (its value, as it is) from the Keychain")
+    secret_get.add_argument("name", nargs="?", default=None, help="e.g. google; without it, every name = value")
+    secret_get.set_defaults(func=cmd_secret)
     secret_set = sub.add_parser("secret-set", parents=[common], help="save a secret in the macOS Keychain and list it in the secret file")
     secret_set.add_argument("name", help="e.g. google")
-    secret_set.add_argument("value", nargs="?", default=None, help="the value (optional: without it you are asked; with it, it stays in your shell history)")
+    secret_set.add_argument("value", nargs="*", default=None, help="the value (optional, may be several words: without it you are asked; with it, it stays in your shell history)")
     secret_set.add_argument("--notes", default=None, help="private_notes for the entry (\\n = new line)")
     secret_set.set_defaults(func=cmd_secret_set)
     about = sub.add_parser("about", parents=[common], help="which mylauncher is this: version, files, Python, settings")
@@ -1556,6 +1976,7 @@ def make_parser() -> argparse.ArgumentParser:
     gpost_p.set_defaults(func=cmd_daily_gospel_post)
     gfb_p = sub.add_parser("daily-gospel-facebook", aliases=["daily_gospel_facebook"], parents=[common], help="today's prayer as a Facebook post: clipboard + browser (Playwright); you press Post")
     gfb_p.add_argument("--copy-only", action="store_true", help="only put the text in the clipboard (no browser)")
+    gfb_p.add_argument("--dry-run", action="store_true", help="like --copy-only: put the text in the clipboard and print what would happen, open no browser")
     gfb_p.add_argument("--cdp", action="store_true", help="connect to a Chrome that you started with --remote-debugging-port=9222")
     gfb_p.set_defaults(func=cmd_daily_gospel_facebook)
     gimage_p = sub.add_parser("daily-gospel-image", aliases=["daily_gospel_image"], parents=[common], help="an image prompt from today's Gospel (Ollama), then pictures of it (create image)")
@@ -1586,7 +2007,16 @@ def make_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None, runner=default_runner, ask=input, sleep=time.sleep, spawn=default_spawn, opener=None) -> int:
-    """Entry point. `runner`, `ask` and `sleep` can be replaced in tests (no real command, nobody asked, no waiting)."""
+    """Entry point. `runner`, `ask` and `sleep` can be replaced in tests (no real command, nobody asked, no waiting).
+
+    The whole program in six lines of logic:
+      1. parse the command line                    -> args (and args.func = the cmd_* to call)
+      2. find and load the configuration           -> config, or a ConfigError turned into text
+      3. if the config is broken: say so and exit 2 - EXCEPT for `doctor` and `report`, whose job is to diagnose it
+      4. call args.func(args, config=..., runner=..., ...) and return its exit code
+    `main()` RETURNS the code instead of exiting, so tests can call it and check the number; only the last two
+    lines of the file call sys.exit(main()).
+    """
     args = make_parser().parse_args(argv)
     config, config_error = None, ""
     try:
@@ -1598,5 +2028,7 @@ def main(argv=None, runner=default_runner, ask=input, sleep=time.sleep, spawn=de
     return args.func(args, config=config, config_error=config_error, runner=runner, ask=ask, sleep=sleep, spawn=spawn, opener=opener)
 
 
+# `__name__ == "__main__"` is True only when this file is RUN (python3 mylauncher.py ...), not when another file
+# imports it (import mylauncher). So tests can import everything here without starting the program.
 if __name__ == "__main__":
     sys.exit(main())

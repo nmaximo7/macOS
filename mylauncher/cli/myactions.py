@@ -18,6 +18,38 @@ Safety rules built in from day one:
 Why `osascript` for shutdown? `sudo shutdown -h now` needs the administrator password and closes
 everything brutally. `tell application "System Events" to shut down` is what the Apple menu does:
 apps are asked to quit and may ask you to save your work.
+
+GUIDED TOUR (for someone who is just starting to program) ------------------------------------
+Read this file top to bottom; it has six layers, each one built on the previous:
+
+  1. COMMAND_ACTIONS, ActionResult, RunOptions     the vocabulary: what an action returns, what it may be told
+  2. default_spawn, default_runner, _execute       the only three places that touch the operating system
+  3. one function per action (open_app, kill_app, copy_snippet, timer, weather, ...)
+  4. ACTIONS                                       the "phone book": action name (text) -> function
+  5. run_item                                      the single door every caller uses
+
+EVERY action has the SAME signature - that is what makes the phone book possible:
+
+      def an_action(item, runner=default_runner, dry_run=False, options=None) -> ActionResult
+
+  item     an `Item` (mytypes.py): the row the user chose. Its .target is the "what" (a path, a URL, a text).
+  runner   a function that runs a command line and returns the result. Real life: default_runner.
+           Tests: support.FakeRunner, which records the commands and runs none of them.
+  dry_run  True = say what you WOULD do and do nothing (`ml run X --dry-run`).
+  options  a RunOptions (all the settings that actions need, built from Config by mylauncher.py).
+
+Three habits you will see in every function (copy them when you write a new action):
+  * `options = options or RunOptions()`   if nobody passed options, use the defaults.
+  * `if dry_run: return ActionResult(True, "dry run, nothing was done. Would ...", command)`  first.
+  * never raise for an expected problem (program missing, exit code != 0): RETURN
+    ActionResult(False, "a sentence a human understands", command) instead.
+
+HOW TO ADD A NEW ACTION:
+  1. write `def my_action(item, runner=default_runner, dry_run=False, options=None) -> ActionResult`
+  2. add `"my_action": my_action,` to ACTIONS (bottom of the file)
+  3. if a command of the JSON may use it, add the name to COMMAND_ACTIONS (below)
+  4. make some Item(..., action="my_action", target=...) somewhere (mylauncher.py), and test it with
+     support.FakeRunner (see tests/test_actions.py for a model).
 """
 
 from __future__ import annotations
@@ -39,17 +71,26 @@ import mypower
 import mytimer
 import mynews
 import myprayer
-from mysecret import ensure_file
+import myemoji
+from mysecret import ensure_file, keychain_set, add_name, scrub_names, sync_file
 from mykill import alive, applescript_quote, running_apps
 from mytypes import Item
 
 # Actions that a "command" in the configuration file may use. (Apps always use open_app.)
+# myconfig.py refuses any other word in the "action" of a command, so a typo is caught at start-up.
 COMMAND_ACTIONS = ("shutdown", "reboot", "screenshot_full", "screenshot_region", "weather", "briefing", "daily_gospel", "daily_gospel_image", "daily_gospel_post", "daily_gospel_facebook")
 
 
 @dataclass
 class ActionResult:
-    """What happened: ok (True/False), a sentence for humans, and the command that was (or would be) run."""
+    """What happened: ok (True/False), a sentence for humans, and the command that was (or would be) run.
+
+    Every action RETURNS one of these (it never prints). The caller decides how to show it: the CLI
+    prints `message` (or JSON from to_dict()), the GUI shows it in a toast.
+
+        ActionResult(True, "opened Safari", ["open", "/Applications/Safari.app"])
+        ActionResult(False, "Safari is not running", [...])
+    """
 
     ok: bool
     message: str
@@ -62,7 +103,16 @@ class ActionResult:
 
 @dataclass
 class RunOptions:
-    """Extra settings some actions use (kill_app and copy_snippet). Everything has a default."""
+    """Extra settings some actions use. Everything has a default, so `RunOptions()` always works.
+
+    mylauncher.py builds one from the `Config` (see `run_options()` there): each field here mirrors
+    a setting of conf/myconfiguration.json. Tests build one by hand with only the fields they need,
+    e.g. RunOptions(sleep=lambda s: None) so a "wait 5 seconds" loop finishes instantly.
+
+    `field(default=time.sleep, repr=False)` is needed for a function stored as a default value
+    (a plain `= time.sleep` would be turned into a METHOD by Python) and repr=False keeps the printed
+    object short.
+    """
 
     force: bool = False  # kill: skip the polite request, force quit now
     grace: float = 5  # kill: seconds to wait for the app to quit by itself
@@ -83,6 +133,9 @@ class RunOptions:
     power_protected: tuple = ("python",)  # applications never touched: the launcher itself
     power_lock: object = None  # a marker file that stops a second request within 2 minutes (None = no guard)
     secret_notify_value: bool = True  # copy_secret: the notification shows the value
+    emoji_favorites_file: str = "~/.config/mylauncher/emoji-favorites.json"  # copy_emoji / emoji_favorite
+    secret_file: str = ""  # edit_secret / secret_set: the file of names (secrets.env)
+    secret_service: str = "justtothepoint-toolkit"  # the Keychain service where every value lives
     timer_folder: str = "~/.config/mylauncher/timers"  # timer: one file per running timer
     timer_sound: str = "/System/Library/Sounds/Hero.aiff"  # timer
     timer_repeat: int = 4  # timer: how many times the sound plays
@@ -106,6 +159,15 @@ class RunOptions:
     log_dir: Path = Path("~/Library/Logs/mylauncher/execute").expanduser()  # execute_background: one log per command
     execute_notify: bool = True  # execute_background: a notification when it ends
     spawn: object = field(default=None, repr=False)  # starts a program without waiting for it; None = default_spawn
+
+
+# ---------------------------------------------------------------------------
+# LAYER 2 - the three functions that really touch the operating system
+# ---------------------------------------------------------------------------
+# A "command" everywhere in this file is a LIST of words: ["open", "/Applications/Safari.app"].
+# We never build one big string and hand it to a shell: a list cannot be tricked by spaces, quotes
+# or `;` in a file name (that attack is called "shell injection"). shlex.join(list) is used only to
+# SHOW a command to a human.
 
 
 def default_spawn(command: list, log_path) -> None:
@@ -134,7 +196,15 @@ def default_runner(command: list, input_text: str | None = None) -> subprocess.C
 
 
 def _execute(command: list, runner, dry_run: bool, done: str) -> ActionResult:
-    """Run `command` through `runner` (or just describe it when dry_run) and report the result."""
+    """Run `command` through `runner` (or just describe it when dry_run) and report the result.
+
+    The small helper most actions end with. Decision table:
+        dry_run                   -> ok, "dry run, nothing was done. Would run: ..."
+        program not found         -> not ok, "the program 'x' was not found (is this a Mac?)"
+        exit code != 0            -> not ok, "failed: <stderr or exit code>"
+        otherwise                 -> ok, the `done` sentence given by the caller
+    (Exit code 0 means "success" for every Unix program; anything else means "something went wrong".)
+    """
     if dry_run:
         return ActionResult(True, "dry run, nothing was done. Would run: " + shlex.join(command), command)
     try:
@@ -145,6 +215,12 @@ def _execute(command: list, runner, dry_run: bool, done: str) -> ActionResult:
         detail = (completed.stderr or "").strip() or f"exit code {completed.returncode}"
         return ActionResult(False, f"failed: {detail}", command)
     return ActionResult(True, done, command)
+
+
+# ---------------------------------------------------------------------------
+# LAYER 3 - the actions, in the order of the file: apps, power, screenshot, weather, news, the
+# daily gospel family, timers, URLs, clipboard (snippets, secrets, emoji), kill, editor, execute.
+# ---------------------------------------------------------------------------
 
 
 def open_app(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
@@ -188,6 +264,9 @@ def _aerospace_workspace(item, name: str, runner, dry_run: bool, options) -> tup
     return workspace, ""
 
 
+# shutdown and reboot share one function: only the verb changes. `_power` closes the applications
+# one by one (force-quitting those that refuse) in a detached script, because the launcher itself is
+# one of the processes that will disappear. See mypower.py for the script and docs/power.md.
 def _power(verb: str, doing: str, runner, dry_run: bool, options) -> ActionResult:
     """Restart ("restart") or shut down ("shut down") the Mac: see mypower.py for what happens and why."""
     options = options or RunOptions()
@@ -236,6 +315,8 @@ def _screenshot_folder(options, runner) -> str:
     return str(Path("~/Desktop").expanduser())
 
 
+# The screenshot is a small /bin/sh SCRIPT (text) that we start detached and do not wait for: choosing
+# an area with the mouse takes as long as you need. `shlex.quote` protects the folder name.
 def screenshot_script(region: bool, folder: str, clipboard: bool, delay: int, notify: bool, method: str) -> str:
     """The shell script that takes the picture (`screencapture`, a program of macOS) and says what happened."""
     flags = "-i -s" if region else f"-T {int(delay)}"  # region: the mouse chooses the area (Esc cancels); full: after `delay` s
@@ -277,6 +358,8 @@ def screenshot_region(item: Item, runner=default_runner, dry_run: bool = False, 
     return _screenshot(True, item, runner, dry_run, options)
 
 
+# `weather` needs no API key: wttr.in answers a plain URL with one line of text. We call `curl`
+# (a program every Mac has) instead of Python's own HTTP code: simple, and easy to fake in tests.
 def weather_url(location: str, fmt: str) -> str:
     """https://wttr.in/Paris?format=%c+%t  (the location may be empty; spaces become +)."""
     return "https://wttr.in/" + urllib.parse.quote(location.strip().replace(" ", "+"), safe="+,~") + "?format=" + fmt
@@ -319,6 +402,10 @@ def news_refresh(item: Item, runner=default_runner, dry_run: bool = False, optio
     return ActionResult(True, f"{total} headlines for {item.target!r}" + (f"  ({bad} feed(s) did not answer)" if bad else "") + ".", [])
 
 
+# The "daily gospel family" below are THIN actions: they only open a terminal window that runs the real
+# work as a CLI command (`ml daily-gospel ...`). Why? The work takes minutes, asks you things (sign in,
+# press Enter) and prints progress; a terminal is the right place. The real code lives in
+# mylauncher.py (cmd_daily_gospel*) and in myprayer / mygospel / mypost / myfacebook.
 def ml_command(*words) -> str:
     """The shell line that runs `ml <words>` in a terminal. bash runs the script: no executable bit needed."""
     return shlex.join(["/bin/bash", str(Path(__file__).resolve().parent / "ml"), *words])
@@ -393,6 +480,8 @@ def timer_cancel(item: Item, runner=default_runner, dry_run: bool = False, optio
     return ActionResult(True, "timer cancelled" if done else "that timer had already ended", [])
 
 
+# A security rule worth remembering: open_url refuses anything that is not http(s)://, because
+# `open` would happily run a file:// path or a custom scheme that a hostile web page chose.
 def open_url(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
     """Open the web address stored in item.target.
 
@@ -426,6 +515,10 @@ def prefix_hint(item: Item, runner=default_runner, dry_run: bool = False, option
     return ActionResult(False, f"type something after it, for example:  {item.complete}...", [])
 
 
+# ---- clipboard actions -----------------------------------------------------
+# pbcopy / pbpaste are macOS programs: pbcopy reads text from its standard input and puts it in the
+# clipboard; pbpaste prints the clipboard. copy_snippet, copy_secret and copy_emoji all start the same
+# way (pipe the text into pbcopy) and differ in what they do afterwards.
 NOTIFICATION_WIDTH = 120  # a notification shows only a few lines: cut long texts
 
 
@@ -486,6 +579,10 @@ def copy_snippet(item: Item, runner=default_runner, dry_run: bool = False, optio
     return ActionResult(True, message, command)
 
 
+# ---- kill_app -----------------------------------------------------------------
+# A small state machine in plain code: ask politely -> wait (polling) -> still alive? -> force or ask.
+# `options.sleep` is injected so the tests do not really wait; `alive()` and `running_apps()` come
+# from mykill.py and ask the system (through the same runner) which processes exist.
 POLL_SECONDS = 0.25  # how often kill_app looks whether the app is gone
 
 
@@ -543,8 +640,6 @@ def kill_app(item: Item, runner=default_runner, dry_run: bool = False, options=N
     return ActionResult(True, f"{name} was force quit", force_command)
 
 
-# The "phone book" of actions: the name written in an Item -> the function to call.
-# To teach the launcher a new trick you write a function above and add one line here.
 def copy_secret(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
     """Copy a secret value to the clipboard and empty the clipboard again after `clear_seconds`.
 
@@ -592,10 +687,64 @@ def edit_secret(item: Item, runner=default_runner, dry_run: bool = False, option
         path, done = ensure_file(item.target)
     except OSError as exc:
         return ActionResult(False, f"cannot create {item.target}: {exc}", [])
+    try:  # pending changes go into the Keychain first (so nothing you typed is lost), then the values are shown for editing
+        sync_file(path, runner, options.secret_service, export=True)
+    except OSError as exc:
+        done = (done + ", " if done else "") + f"values not shown: {exc}"
     result = edit_file(Item(item.id, item.title, "edit", "edit_file", target=str(path)), runner, False, options)
     if result.ok and done:
         result = ActionResult(True, f"{result.message} ({done})", result.command)
     return result
+
+
+def copy_emoji(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """Copy an emoji (item.target) to the clipboard and say so. The window pastes it afterwards, like a snippet."""
+    options = options or RunOptions()
+    command = ["pbcopy"]
+    if dry_run:
+        return ActionResult(True, f"dry run, nothing was done. Would copy {item.target} with pbcopy", command)
+    try:
+        done = runner(command, input_text=item.target)
+    except FileNotFoundError:
+        return ActionResult(False, "the program 'pbcopy' was not found (is this a Mac?)", command)
+    if done.returncode != 0:
+        return ActionResult(False, f"could not copy: {(done.stderr or '').strip() or f'exit code {done.returncode}'}", command)
+    message = f"{item.target} copied to the clipboard"
+    if options.notify:
+        ok, detail = mynotify.send(runner, options.notify_method, "mylauncher", f"{item.target} copied", item.title.strip())
+        if not ok:
+            message += f"  (notification failed: {detail})"
+    return ActionResult(True, message, command)
+
+
+def emoji_favorite(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """Add (item.target = the emoji) to your favorites, or remove it (item.id starts with emoji-remove:)."""
+    options = options or RunOptions()
+    removing = item.id.startswith("emoji-remove:")
+    if dry_run:
+        return ActionResult(True, f"dry run, nothing was done. Would {'remove' if removing else 'add'} {item.target} {'from' if removing else 'to'} my_favorites", [])
+    if removing:
+        changed = myemoji.remove_favorite(options.emoji_favorites_file, item.target)
+        return ActionResult(True, f"{item.target} removed from my_favorites" if changed else f"{item.target} was not in my_favorites", [])
+    changed = myemoji.add_favorite(options.emoji_favorites_file, item.target)
+    return ActionResult(True, f"{item.target} added to my_favorites" if changed else f"{item.target} was already in my_favorites", [])
+
+
+def secret_set(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
+    """Save NAME = VALUE in the Keychain. item.target is JSON {"name": ..., "value": ...}; the value is never printed."""
+    import json as _json
+    options = options or RunOptions()
+    data = _json.loads(item.target)
+    name, value = data["name"], data["value"]
+    if dry_run:
+        return ActionResult(True, f"dry run, nothing was done. Would save {name} in the Keychain (service {options.secret_service})", ["security", "add-generic-password"])
+    ok, problem = keychain_set(runner, options.secret_service, name, value)
+    if not ok:
+        return ActionResult(False, f"{name} was NOT saved: {problem}", ["security", "add-generic-password"])
+    if options.secret_file:
+        add_name(options.secret_file, name)
+        scrub_names(options.secret_file, [name])  # an old plain value in the file must not overwrite the new one
+    return ActionResult(True, f"{name} saved in the Keychain", ["security", "add-generic-password"])
 
 
 def edit_file(item: Item, runner=default_runner, dry_run: bool = False, options=None) -> ActionResult:
@@ -670,9 +819,17 @@ def execute_terminal(item: Item, runner=default_runner, dry_run: bool = False, o
     return result
 
 
+# ---------------------------------------------------------------------------
+# LAYER 4 - the "phone book" of actions: the name written in an Item -> the function to call.
+# To teach the launcher a new trick you write a function above and add one line here.
+# A dict ({key: value}) is perfect for this: ACTIONS["open_app"] IS the function open_app.
+# ---------------------------------------------------------------------------
 ACTIONS = {
     "copy_secret": copy_secret,
     "edit_secret": edit_secret,
+    "secret_set": secret_set,
+    "copy_emoji": copy_emoji,
+    "emoji_favorite": emoji_favorite,
     "edit_file": edit_file,
     "execute_background": execute_background,
     "execute_terminal": execute_terminal,
@@ -698,7 +855,17 @@ ACTIONS = {
 
 
 def run_item(item: Item, runner=default_runner, dry_run: bool = False, options: RunOptions | None = None) -> ActionResult:
-    """Do what the item says (look its action up in ACTIONS)."""
+    """Do what the item says (look its action up in ACTIONS).
+
+    LAYER 5 - the single door. The CLI (`ml run`), the GUI and the tests all arrive here:
+
+        run_item(Item(id="app:Safari", title="Run Safari", kind="app", action="open_app",
+                      target="/Applications/Safari.app"), dry_run=True)
+        -> ActionResult(ok=True, message="dry run, nothing was done. Would run: open /Applications/Safari.app", ...)
+
+    `function(item, runner=runner, ...)` calls whatever function the dict returned: functions are
+    values in Python, you can store them in a dict and call them later.
+    """
     function = ACTIONS.get(item.action)
     if function is None:
         return ActionResult(False, f"unknown action '{item.action}'", [])

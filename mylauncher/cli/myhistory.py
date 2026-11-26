@@ -13,6 +13,17 @@ the most used comes first.
 
 Safety rules: a missing or damaged file is simply "no history" (the launcher must never refuse to
 start because of its memory), and a write that fails (disk full, read-only folder) is ignored.
+
+GUIDED READING: a class with state (the path and the on/off switch) and five small methods.
+  counts()  read the file -> a dict {id: n}; ANY problem (no file, damaged JSON, wrong types) returns {} - never an error.
+  _write()  save the dict. The "write to a temporary file, then os.replace" pattern is ATOMIC: the real file is
+            replaced in one step by the operating system, so a crash or power cut leaves either the old file or the
+            new one, never half of one. (The leading underscore says "internal: call record(), not me".)
+  record()  read counts, add 1, write. Called by `ml run` after a successful real run (not for secrets or emoji).
+  clear()   delete the file (`ml history --clear`).
+  top()     the most used first. `key=lambda pair: (-pair[1], pair[0])` = highest count first, then alphabetical.
+Try it:  ml history --limit 5        (and `ml history --clear` forgets everything)
+Privacy: the file only has item ids and counts (never what you typed), and lives outside the git project.
 """
 
 from __future__ import annotations
@@ -23,6 +34,8 @@ from pathlib import Path
 
 
 class History:
+    # `__init__` runs when you write History(path, True). `self` is the object being built; the first line stores
+    # both values on it (a "tuple assignment": a, b = x, y). Methods read them back as self.path / self.enabled.
     def __init__(self, path, enabled: bool = True):
         self.path, self.enabled = Path(path), enabled
 

@@ -13,6 +13,31 @@ Where is the file looked for? In this order (first hit wins):
   1. the option  --config /some/file.json        (given on the command line)
   2. the environment variable  MYLAUNCHER_CONF   (handy for experiments and tests)
   3. conf/myconfiguration.json next to the cli/ folder  (the normal case)
+
+GUIDED TOUR (for someone who is just starting to program) ------------------------------------
+This file has four parts, in the order you meet them when you read from the top:
+
+  PART 1 - constants and small "shapes"  (DEFAULT_COLORS, VALID_MODIFIERS, CommandDef, BRIEFING_DEFAULTS)
+  PART 2 - the `Config` class: ONE object that holds every setting, already checked.
+  PART 3 - find_config_path() and load_config(): "which file?" and "read it".
+  PART 4 - parse_config(): the long function that CHECKS every section of the JSON and builds Config.
+
+The idea in one picture:
+
+      conf/myconfiguration.json  --json.loads-->  dict  --parse_config-->  Config (frozen)
+         (text on disk)                        (plain Python)     (checked)    (read-only object)
+
+Why so much checking? JSON is just text; Python does not know that "max_results" must be a whole
+number >= 1. If we did not check here, a typo would explode far away (in the search code) with an
+unreadable error. Here the message is: `setting "search.max_results" must be a whole number`.
+
+HOW TO ADD A NEW SETTING (the recipe you will use again and again) ---------------------------
+  1. Add a field to the `Config` dataclass, WITH a default:        my_thing: int = 5
+  2. In parse_config(), read it with _check() and validate it:     my_thing = _check(sec.get("my_thing", 5), int, "sec.my_thing")
+  3. Pass it in the `return Config(...)` at the end:               my_thing=my_thing,
+  4. Add it to conf/myconfiguration.json AND defaults/myconfiguration.json (and to docs/settings.md:
+     the test-suite fails if a documented key is missing - that is on purpose).
+Forget step 3 and the setting is silently ignored: the value is read, checked, then thrown away.
 """
 
 from __future__ import annotations
@@ -30,7 +55,11 @@ from mynotify import METHODS as NOTIFY_METHODS
 from myquicklinks import load_quicklinks
 from mytypes import ConfigError  # defined in mytypes.py; imported here so "from myconfig import ConfigError" keeps working
 
-ENV_VAR = "MYLAUNCHER_CONF"
+# ---------------------------------------------------------------------------
+# PART 1 - constants and small shapes
+# ---------------------------------------------------------------------------
+# An UPPER_CASE name is a Python convention for "constant: do not change me while the program runs".
+ENV_VAR = "MYLAUNCHER_CONF"  # name of the environment variable that can point to another config file
 # The colours of the window (any #rrggbb). The names are the only ones allowed in window.colors.
 DEFAULT_COLORS = {
     "background": "#1c1c1f",  # the window
@@ -40,13 +69,25 @@ DEFAULT_COLORS = {
     "selection": "#34343c",  # the highlighted row
     "command": "#ff9f0a",  # the word the launcher recognised (kill, yt, ;p ...)
 }
+# A "regular expression": ^ = start, # = a literal #, [0-9a-fA-F]{6} = exactly six hexadecimal
+# digits, $ = end. So "#ff9f0a" matches, "ff9f0a", "#ff9f0" and "#gg0000" do not.
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+# Keys that can be held while pressing the global hotkey. A tuple (round brackets) = a list that
+# cannot be changed.
 VALID_MODIFIERS = ("command", "shift", "control", "option")
 
 
 @dataclass(frozen=True)
 class CommandDef:
-    """A command written in the "commands" list of the configuration file."""
+    """A command written in the "commands" list of the configuration file.
+
+    `@dataclass` writes the boring parts of a class for us (__init__, __repr__, ==). `frozen=True`
+    makes the object READ-ONLY: `cmd.title = "x"` raises an error. Read-only data cannot be
+    changed by accident by some distant function, which is the root of many bugs.
+
+    Example (one entry of "commands" in the JSON)  ->  one CommandDef:
+        {"id": "restart", "title": "Restart", "action": "reboot", "keywords": ["restart"], "confirm": true}
+    """
 
     id: str
     title: str
@@ -57,6 +98,8 @@ class CommandDef:
     description: str = ""  # grey text under/after the title
 
 
+# Default values of the "briefing" section. Kept as a dict because the section is a bag of
+# unrelated small options; parse_config() checks each value has the SAME TYPE as its default here.
 BRIEFING_DEFAULTS = {
     "gog": "gog",
     "qmd": "qmd",
@@ -71,7 +114,23 @@ BRIEFING_DEFAULTS = {
 
 @dataclass(frozen=True)
 class Config:
-    """All the settings, checked and with the right types."""
+    """All the settings, checked and with the right types.
+
+    This is the ONLY object the rest of the program asks for settings. Typical use anywhere else:
+
+        config = load_config(find_config_path())
+        config.max_results        # -> 8
+        config.window_width       # -> 640
+
+    Reading guide for the fields below:
+      * The first nine fields have NO default: they are REQUIRED in the JSON. Python insists that
+        fields without a default come first.
+      * Every other field has a default (`= value`), used when the JSON does not mention it. That is
+        how a brand-new setting can be added without breaking an older configuration file.
+      * Names are `section_key`: JSON  "kill": {"grace_seconds": 5}  ->  `config.kill_grace_seconds`.
+      * Paths are `Path` objects, already expanded (~ -> /Users/you); lists became TUPLES.
+      * The comment after each field is its meaning. docs/settings.md explains every JSON key.
+    """
 
     path: Path  # which file they came from
     hotkey_modifiers: tuple  # ("command",)   (used by the window, app/)
@@ -146,6 +205,8 @@ class Config:
     secret_service: str = "justtothepoint-toolkit"  # Keychain service name (the one openrouter.py --set-key uses)
     secret_input_echo: str = "hidden"  # ml secret-set: "hidden" (nothing shown), "asterisks" (*****) or "visible" (the characters)
     secret_notify_value: bool = True  # the notification after copying a secret shows the value
+    emoji_favorites_file: Path = Path("~/.config/mylauncher/emoji-favorites.json").expanduser()  # your favorite emoji (the category my_favorites)
+    emoji_paste: bool = True  # after copying an emoji, press Command+V where you were typing
     secret_reveal: int = 4  # how many last characters of a value stay visible in the list (0 = none)
     aerospace_enabled: bool = False  # is AeroSpace on this Mac? then opening an app also goes to its workspace
     aerospace_command: str = "aerospace"
@@ -237,7 +298,13 @@ class Config:
 
 
 def find_config_path(explicit: str | None = None, environ: dict | None = None) -> Path:
-    """Decide which file to read (see the three rules in the module docstring)."""
+    """Decide which file to read (see the three rules in the module docstring).
+
+    `explicit` is what came from --config (or None). `environ` is normally the real environment;
+    the tests pass a small fake dict instead, so they never depend on the machine they run on.
+    This "give the function what it needs as a parameter" habit is called dependency injection
+    and you will see it in every module of this project.
+    """
     environ = os.environ if environ is None else environ
     if explicit:
         return Path(explicit).expanduser()
@@ -249,6 +316,8 @@ def find_config_path(explicit: str | None = None, environ: dict | None = None) -
 
 def load_config(path: Path) -> Config:
     """Read the JSON file, check every setting and return a Config. Raises ConfigError."""
+    # Step 1: read the text. Step 2: turn text into Python data (json.loads). Step 3: check it.
+    # Every failure becomes a ConfigError with a human sentence; the caller prints it, no traceback.
     path = Path(path)
     try:
         text = path.read_text(encoding="utf-8")
@@ -261,10 +330,11 @@ def load_config(path: Path) -> Config:
     except json.JSONDecodeError as exc:
         # JSON is strict: no comments, no trailing commas. The line number helps a lot.
         raise ConfigError(f"{path} is not valid JSON (line {exc.lineno}, column {exc.colno}): {exc.msg}") from None
-    config = parse_config(data, path)
+    config = parse_config(data, path)  # PART 4: all the checking happens in here
     # The quicklinks live in their own file (conf/quicklinks.json); the keyword of the "kill" mode is reserved.
-    reserved = (config.kill_word, config.run_word, config.help_word, config.edit_word, config.execute_word, config.secret_word, config.secret_edit_word)
+    reserved = (config.kill_word, config.run_word, config.help_word, config.edit_word, config.execute_word, config.secret_word, config.secret_edit_word, "emoji")
     links = load_quicklinks(config.quicklinks_path, reserved=reserved)
+    # `replace` builds a COPY of the frozen Config with some fields changed (we cannot assign to it).
     return replace(
         config, quicklinks=links, edit_entries=load_edit(config.edit_path), execute_entries=load_execute(config.execute_path)
     )
@@ -276,6 +346,10 @@ def load_config(path: Path) -> Config:
 
 
 def _section(data: dict, name: str) -> dict:
+    """The REQUIRED sections (hotkey, apps, search): return data[name] or fail with a clear message.
+
+    The optional sections use `data.get("name", {})` instead: missing -> an empty dict -> defaults.
+    """
     value = data.get(name)
     if not isinstance(value, dict):
         raise ConfigError(f'setting "{name}" must be an object {{ ... }}')
@@ -293,6 +367,13 @@ def _check(value, kind: type, where: str):
     return value
 
 
+# NOTE on the pattern used 150 times below:  _check(section.get("key", DEFAULT), TYPE, "section.key")
+#   - section.get("key", DEFAULT)  -> the value in the file, or DEFAULT when the key is missing
+#   - TYPE                          -> str, int, bool, list or dict
+#   - "section.key"                 -> the text used in the error message, so you know what to fix
+# `where` is that text in all the helpers.
+
+
 def _text_list(value, where: str) -> tuple:
     """A JSON list of texts -> a tuple of texts."""
     items = _check(value, list, where)
@@ -302,11 +383,19 @@ def _text_list(value, where: str) -> tuple:
 
 
 def parse_config(data, path: Path) -> Config:
-    """Turn the dictionary read from JSON into a checked Config."""
+    """Turn the dictionary read from JSON into a checked Config.
+
+    Read it as a long form with many boxes. For each section of the JSON we (1) fetch the section,
+    (2) check each value's type, (3) check its meaning (range, allowed words, ...), (4) keep it in
+    a local variable. At the very end `return Config(...)` puts all the variables in one object.
+    The function is long on purpose: it is boring, linear, and easy to follow with your finger.
+    """
     if not isinstance(data, dict):
         raise ConfigError("the configuration must be a JSON object { ... }")
 
     # ---- hotkey -------------------------------------------------------------
+    # Example JSON:  "hotkey": {"modifiers": ["option"], "key": "d", "swallow": true}
+    # `m.lower() for m in ...` is a generator expression: lower-case every modifier ("Option" -> "option").
     hotkey = _section(data, "hotkey")
     modifiers = tuple(m.lower() for m in _text_list(hotkey.get("modifiers"), "hotkey.modifiers"))
     for modifier in modifiers:
@@ -319,6 +408,8 @@ def parse_config(data, path: Path) -> Config:
     hotkey_swallow = _check(hotkey.get("swallow", True), bool, "hotkey.swallow")
 
     # ---- apps ---------------------------------------------------------------
+    # "folders" are where .app bundles live. Path(f).expanduser() turns "~/Applications" into
+    # "/Users/you/Applications" (Python does NOT expand ~ by itself).
     apps = _section(data, "apps")
     run_word = _check(apps.get("word", "run"), str, "apps.word").lower()
     if not run_word or len(run_word.split()) != 1:
@@ -338,6 +429,8 @@ def parse_config(data, path: Path) -> Config:
         raise ConfigError("search.max_browse_results must be at least 1")
 
     # ---- commands -----------------------------------------------------------
+    # Each entry must have a unique id and an `action` that exists in COMMAND_ACTIONS (myactions.py).
+    # That is the link between the JSON ("action": "lock_screen") and the Python function that runs.
     raw_commands = _check(data.get("commands"), list, "commands")
     commands, seen = [], set()
     for number, entry in enumerate(raw_commands):
@@ -362,7 +455,10 @@ def parse_config(data, path: Path) -> Config:
             )
         )
 
-    # ---- aerospace and screenshot (optional) ---------------------------------
+    # ---- the "optional" sections from here on ---------------------------------
+    # (aerospace, power, ollama, timer, images, briefing, create_image, gospel, facebook, post, news,
+    # weather, screenshot). They all follow the same pattern: missing section -> {} -> defaults.
+    # Each block is independent: you can read any one of them alone, in any order.
     aero = _check(data.get("aerospace", {}), dict, "aerospace")
     aero_enabled = _check(aero.get("enabled", False), bool, "aerospace.enabled")
     aero_command = _check(aero.get("command", "aerospace"), str, "aerospace.command").strip() or "aerospace"
@@ -501,6 +597,7 @@ def parse_config(data, path: Path) -> Config:
         raise ConfigError("screenshot.delay_seconds must be between 0 and 30")
 
     # ---- window (optional: every value has a default) -----------------------
+    # Drawn by the tkinter GUI (app/). Colours are validated with HEX_COLOR above.
     window = data.get("window", {})
     _check(window, dict, "window")
     window_title = _check(window.get("title", "mylauncher"), str, "window.title")
@@ -634,6 +731,10 @@ def parse_config(data, path: Path) -> Config:
     exec_log_dir = Path(_check(exec_section.get("log_dir", "~/Library/Logs/mylauncher/execute"), str, "execute.log_dir")).expanduser()
     exec_notify = _check(exec_section.get("notify", True), bool, "execute.notify")
 
+    emoji_section = data.get("emoji", {})
+    _check(emoji_section, dict, "emoji")
+    emoji_favorites = Path(_check(emoji_section.get("favorites_file", "~/.config/mylauncher/emoji-favorites.json"), str, "emoji.favorites_file")).expanduser()
+    emoji_paste = _check(emoji_section.get("paste", True), bool, "emoji.paste")
     secret_section = data.get("secret", {})
     _check(secret_section, dict, "secret")
     secret_word = _check(secret_section.get("word", "secret"), str, "secret.word").lower()
@@ -659,6 +760,10 @@ def parse_config(data, path: Path) -> Config:
     if isinstance(toast_seconds, bool) or not isinstance(toast_seconds, (int, float)) or toast_seconds <= 0:
         raise ConfigError("notifications.toast_seconds must be a number of seconds above 0")
 
+    # ---- cross-checks: rules that involve SEVERAL sections ---------------------
+    # The "magic words" of the launcher window (run, kill, help, edit, execute, secret, ...) must all
+    # differ, otherwise typing one of them would be ambiguous. `set(words)` drops duplicates, so if
+    # it is shorter than the list, two words were equal.
     words = [run_word, kill_word, help_word, edit_word, execute_word, secret_word, secret_edit_word]
     for word_name, word in (("edit.word", edit_word), ("execute.word", execute_word), ("secret.word", secret_word), ("secret.edit_word", secret_edit_word)):
         if not word or len(word.split()) != 1:
@@ -677,6 +782,10 @@ def parse_config(data, path: Path) -> Config:
     if cache_seconds < 0:
         raise ConfigError("help.cache_seconds cannot be negative (0 = do not remember)")
 
+    # ---- build the final object ------------------------------------------------
+    # `name=value` are KEYWORD arguments: the order does not matter, and a missing one stops with
+    # a TypeError during development (good: it means you forgot step 3 of the recipe).
+    # `**help_paths` unpacks a dict into more keyword arguments (the seven "help.*" paths).
     return Config(
         path=Path(path),
         hotkey_modifiers=modifiers,
@@ -801,6 +910,8 @@ def parse_config(data, path: Path) -> Config:
         window_colors=colors,
         browser_command=browser_command,
         help_word=help_word,
+        emoji_favorites_file=emoji_favorites,
+        emoji_paste=emoji_paste,
         secret_word=secret_word,
         secret_edit_word=secret_edit_word,
         secret_file=secret_file,

@@ -12,6 +12,26 @@ Python concepts used here (explained in docs/03-implementation.md):
   * dataclass: a class that is just a list of named fields; Python writes __init__ for us.
   * frozen=True: after creation the object cannot be changed (fewer surprises).
   * tuple: a list that cannot be changed.
+
+LINE-BY-LINE READING GUIDE ---------------------------------------------------------------------------
+  `from __future__ import annotations`   lets us write type hints like `int | None` and refer to classes
+                                         defined later in the file; it changes nothing at run time.
+  `class ConfigError(Exception)`         a NEW KIND OF ERROR. `raise ConfigError("...")` stops the normal flow and
+                                         jumps to the nearest `except ConfigError`. Its own class lets callers catch
+                                         "settings problems" without also catching unrelated bugs.
+  DEFAULT_ICONS / KIND_LABELS            two dictionaries (key -> value) used when an Item does not choose its own.
+                                         `DEFAULT_ICONS.get("app", "")` = the value, or "" if the key is missing.
+  class Item                             ONE ROW. 12 fields; only id, title, kind and action are required.
+  class Match                            an Item plus its score.
+  to_dict()                              turns an object into a plain dict, because JSON has no "objects": this is
+                                         the bridge between the engine (Python objects) and the window (JSON text).
+Example of an Item and its JSON form (what `ml search --json` prints for each result):
+
+    Item(id="app:Obsidian", title="Run Obsidian", kind="app", action="open_app", target="/Applications/Obsidian.app")
+    -> {"id": "app:Obsidian", "title": "Run Obsidian", "kind": "app", "action": "open_app",
+        "target": "/Applications/Obsidian.app", "keywords": [], "confirm": false, "complete": "",
+        "subtitle": "", "detail": "", "icon": "🚀", "badge": "Application"}
+Note icon and badge: they were empty in the Item, so to_dict() filled them from the two dictionaries.
 """
 
 from __future__ import annotations
@@ -36,6 +56,8 @@ KIND_LABELS = {"app": "Application", "command": "Command", "prefix": "Hint", "qu
 class Item:
     """One thing the launcher can do."""
 
+    # Fields WITHOUT a default (`= ...`) must be given when you create an Item; fields WITH one are optional.
+    # Python requires the required fields first, which is why id/title/kind/action come before the rest.
     id: str  # unique name, used to pick an exact item: "app:Obsidian" or "cmd:shutdown"
     title: str  # what the user sees in the list: "Run Obsidian"
     kind: str  # "app", "command" (e.g. shutdown), "prefix" (a word that needs more text after it: "yt", "kill"),
@@ -43,6 +65,7 @@ class Item:
     #            or "snippet" (a piece of text from your Espanso files, copied to the clipboard)
     action: str  # which function in myactions.py does the work: "open_app" or "shutdown"
     target: str = ""  # for kind="app": the path of the .app folder, e.g. /Applications/Obsidian.app
+    # (a tuple, not a list, because a frozen object should hold only unchangeable things; `()` is the empty tuple)
     keywords: tuple = ()  # extra words that also find this item ("power off" finds Shutdown)
     confirm: bool = False  # True = ask "are you sure?" before doing it
     complete: str = ""  # what Tab writes in the search box; empty = the title in lower case
@@ -52,7 +75,11 @@ class Item:
     badge: str = ""  # small label at the end of the row; empty = the default for the kind (KIND_LABELS)
 
     def to_dict(self) -> dict:
-        """A plain dictionary, ready to be written as JSON (this is what the GUI will read)."""
+        """A plain dictionary, ready to be written as JSON (this is what the GUI will read).
+
+        `list(self.keywords)` because JSON has lists but no tuples. `self.icon or DEFAULT_ICONS.get(...)` means
+        "the icon if it is not empty, otherwise the default of the kind": `or` returns its first non-empty side.
+        """
         return {
             "id": self.id,
             "title": self.title,
@@ -77,6 +104,7 @@ class Match:
     score: int
 
     def to_dict(self) -> dict:
+        """The item's dict plus the score. This is one entry of "results" in `ml search --json`."""
         data = self.item.to_dict()
         data["score"] = self.score
         return data

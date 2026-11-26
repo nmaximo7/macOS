@@ -414,5 +414,9 @@
     "channel": "chrome",
     "cdp_port": 9222,
     "url": "https://www.facebook.com"
+  },
+  "emoji": {
+    "favorites_file": "~/.config/mylauncher/emoji-favorites.json",
+    "paste": true
   }
 }

@@ -18,6 +18,10 @@ MODE_LABELS = {
     "edit": "📝 Edit a file",
     "secret": "🔑 Secrets",
     "keep_secret": "🔐 Edit the secret file",
+    "emoji": "😀 Emoji",
+    "emoji_add": "⭐ Add an emoji to my_favorites",
+    "emoji_remove": "⭐ Remove an emoji from my_favorites",
+    "secret_set": "🔐 Save a secret in the Keychain",
     "execute": "▶️ Execute",
 }
 

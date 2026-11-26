@@ -142,6 +142,7 @@ class Parsing(unittest.TestCase):
 class SecretCase(CliCase):
     def setUp(self):
         super().setUp()
+        self.runner = support.FakeKeychain()  # a pretend Keychain: old plain values in the file are moved into it, then shown from it
         self.secret = self.tmp / "private" / "secrets.env"
         self.secret.parent.mkdir()
         self.secret.write_text(SECRETS, encoding="utf-8")
@@ -161,16 +162,14 @@ class SecretCase(CliCase):
 
 
 class SecretList(SecretCase):
-    def test_secret_lists_all_first_then_the_entries_with_values_hidden(self):
+    def test_secret_lists_all_first_then_the_entries_with_their_values(self):
         data = self.search("secret")
         self.assertEqual((data["mode"], data["highlight"]), ("secret", 6))
         self.assertEqual([r["title"] for r in data["results"]], ["all", "private_vault", "OPENROUTER_API_KEY", "TOKEN", "SHORT", "NOTE", "PLAIN"])
         rows = {r["title"]: r for r in data["results"]}
         row = rows["OPENROUTER_API_KEY"]
         self.assertEqual((row["icon"], row["badge"], row["kind"], row["action"]), ("🔑", "Secret", "secret", "copy_secret"))
-        self.assertTrue(row["subtitle"].startswith("•"))
-        self.assertIn("ABCD", row["subtitle"])
-        self.assertNotIn("abcdef0123456789", row["subtitle"])  # the middle never appears in the list
+        self.assertIn("sk-or-v1-abcdef0123456789ABCD", row["subtitle"])  # values are shown as they are (since Step 19.2)
         self.assertIn("# OpenRouter, for content_creation.py", row["subtitle"])
         self.assertIn("sk-or-v1-abcdef0123456789ABCD", row["detail"])  # the detail view shows it in full
         self.assertEqual(rows["all"]["detail"].count("="), 5)
@@ -185,6 +184,7 @@ class SecretList(SecretCase):
         self.assertEqual(self.search("secret tok")["completion"], "secret TOKEN")
 
     def test_loose_permissions_are_warned_about_in_the_list_and_in_doctor(self):
+        self.secret.write_text("OPENROUTER_API_KEY=\n", encoding="utf-8")  # no pending values: a file we do not need to rewrite
         os.chmod(self.secret, 0o644)
         self.assertEqual(self.search("secret")["results"][0]["title"], "The secret file is not safe")
         code, out, _ = self.call("doctor")
@@ -243,7 +243,7 @@ class CopySecret(SecretCase):
 
     def test_dry_run_copies_nothing(self):
         code, out, _ = self.call("run", "--id", "secret:TOKEN", "--text=secret token", "--dry-run")
-        self.assertEqual((code, self.runner.calls, self.spawned), (0, [], []))
+        self.assertEqual((code, [c for c in self.runner.calls if c[0] != "security"], self.spawned), (0, [], []))  # (only Keychain reads)
 
     def test_pbcopy_failure_is_reported_and_nothing_is_scheduled(self):
         item = Item("secret:X", "X", "secret", "copy_secret", target="v")
@@ -274,7 +274,7 @@ class KeepSecret(SecretCase):
         self.assertEqual(code, 0)
         self.assertIn("created", out)
         self.assertEqual(stat.S_IMODE(self.secret.stat().st_mode), 0o600)
-        self.assertIn("NAME=value", self.secret.read_text())
+        self.assertIn("name=value", self.secret.read_text())
         self.assertEqual(self.runner.calls[-1][-1], str(self.secret))
 
     def test_a_missing_folder_is_created_too(self):
@@ -354,15 +354,15 @@ class Keychain(SecretCase):
     def setUp(self):
         super().setUp()
         self.secret.write_text("# OpenRouter\nOPENROUTER_API_KEY=keychain\nOTHER=\nPLAIN=abcdefgh12345678\n", encoding="utf-8")
-        self.runner = support.FakeRunner(outputs={KEY: "sk-or-v1-0123456789abcdef\n"})
+        self.runner = support.FakeKeychain({"OPENROUTER_API_KEY": "sk-or-v1-0123456789abcdef"})
 
-    def test_the_value_comes_from_the_keychain_and_is_masked_in_the_list(self):
+    def test_the_value_comes_from_the_keychain_and_is_shown_as_it_is(self):
         data = self.search("secret")
         rows = {r["title"]: r for r in data["results"]}
         self.assertTrue(rows["OPENROUTER_API_KEY"]["subtitle"].startswith("🔒 "))
-        self.assertTrue(rows["OPENROUTER_API_KEY"]["subtitle"].endswith("cdef   # OpenRouter"))
+        self.assertTrue(rows["OPENROUTER_API_KEY"]["subtitle"].endswith("sk-or-v1-0123456789abcdef   # OpenRouter"))
         self.assertIn("sk-or-v1-0123456789abcdef", rows["OPENROUTER_API_KEY"]["detail"])
-        self.assertIn(KEY, [tuple(c) for c in self.runner.calls])
+        self.assertIn("find-generic-password", [c[1] for c in self.runner.calls])
 
     def test_a_missing_keychain_entry_says_how_to_add_it(self):
         rows = {r["title"]: r for r in self.search("secret")["results"]}
@@ -391,9 +391,9 @@ class Keychain(SecretCase):
             code, out, _ = self.call("secret-set", "NEWKEY")
         self.assertEqual(code, 0)
         self.assertEqual(calls[0], ["security", "add-generic-password", "-U", "-s", "justtothepoint-toolkit", "-a", "NEWKEY", "-w"])
-        self.assertIn("NEWKEY=keychain", self.secret.read_text())
+        self.assertRegex(self.secret.read_text(), r"(?m)^NEWKEY=$")
         self.call("secret-set", "NEWKEY")  # twice: still one line
-        self.assertEqual(self.secret.read_text().count("NEWKEY=keychain"), 1)
+        self.assertEqual(self.secret.read_text().count("NEWKEY="), 1)
 
     def test_secret_set_rejects_a_bad_name(self):
         self.assertEqual(self.call("secret-set", "a b")[0], 2)

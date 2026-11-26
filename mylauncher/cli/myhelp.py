@@ -28,6 +28,33 @@ except `zsh -ic alias` and a few `--version` commands):
 Every answer is a list of ROWS: title, a one-line subtitle and a longer `detail` (the window shows it
 when you press Enter on a row; Enter again copies it). Asking a shell (aliases) is slow, so those
 answers are remembered for help.cache_seconds in a small file outside the repository.
+
+GUIDED TOUR (for someone who is just starting to program) ------------------------------------------
+The whole file is ONE idea repeated eleven times: every topic is a LOADER, a function
+
+        def something_rows(config, runner) -> (rows, problem)
+
+that reads some source (a shell, a file, a folder) and returns
+        rows     a list of `Row`s (title, subtitle, detail, target) - what to show
+        problem  "" when all is well, otherwise ONE sentence saying what is missing and how to fix it
+Never an exception: a missing file is a normal situation for a help system, so it is reported as a problem row ("Nothing to show
+for aliases: file not found ... (help.aliases_file)").
+
+The file in five parts:
+  1. TOPICS, SYNONYMS, CACHED, Row      the vocabulary (what topics exist, other names for them, which are slow)
+  2. small helpers                      resolve_topic, comment_above, read_text, first_line
+  3. one loader per topic               alias_rows, function_rows, aerospace_rows, espanso_rows, skill_rows, keys_rows,
+                                        script_rows, system_rows, launcher_rows, screenshot_rows, about_rows
+  4. LOADERS + the cache                the "phone book" topic -> loader (same idea as ACTIONS) and load_rows(), which
+                                        remembers slow answers in a small JSON file
+  5. rows -> Items -> search            row_item, topic_items, problem_item, parse_help_query, help_search, help_end
+
+What `help aliases ll` does, step by step:
+  parse_help_query("help aliases ll")  -> topic "aliases", filter "ll"
+  load_rows(config, "aliases", runner) -> cache fresh? use it : alias_rows() runs `zsh -ic alias`, parses it, stores in cache
+  row_item(...) for each row           -> an Item(kind="help", action="copy_snippet") (Enter copies its text)
+  rank(items, "ll", fuzzy=False)       -> the best matches (mysearch.py, chapter 6)
+Note `fuzzy=False`: letters-in-order matching against long texts would match almost anything.
 """
 
 from __future__ import annotations
@@ -50,6 +77,7 @@ except ModuleNotFoundError:  # Python older than 3.11: the aerospace topic says 
     tomllib = None
 
 # name: (emoji, what it shows, label at the end of the row)
+# A dict of tuples. Adding a topic = one line here + one loader function + one line in LOADERS (below).
 TOPICS = {
     "aliases": ("🔗", "Shell aliases (zsh -ic alias)", "Alias"),
     "functions": ("🧩", "Functions of your ~/.zsh_functions", "Function"),
@@ -79,6 +107,8 @@ SYNONYMS = {
 CACHED = ("aliases", "system")  # the slow ones (they start programs)
 
 
+# A Row is deliberately SIMPLER than an Item: just text. Loaders only describe content; row_item() (part 5) later wraps
+# each Row in an Item. (Not frozen here: it is plain data that asdict() turns into JSON for the cache.)
 @dataclass
 class Row:
     uid: str  # unique inside its topic (a title can repeat: the same key in two AeroSpace modes)
@@ -98,7 +128,12 @@ def resolve_topic(word: str) -> str:
 
 
 def comment_above(lines: list, index: int) -> str:
-    """The block of `# comment` lines right above lines[index], as plain text (no # signs)."""
+    """The block of `# comment` lines right above lines[index], as plain text (no # signs).
+
+    Walks UPWARDS from the line before `index` while the lines are comments (`while` loop, `i -= 1`), collecting them, then
+    reverses the list so they read in file order. `#!` (a shebang line) is not a comment for our purpose.
+    Example: lines ["# list files", "# long format", "alias ll='ls -l'"], index 2  ->  "list files\nlong format".
+    """
     found = []
     i = index - 1
     while i >= 0 and lines[i].lstrip().startswith("#") and not lines[i].startswith("#!"):
@@ -108,6 +143,10 @@ def comment_above(lines: list, index: int) -> str:
 
 
 def read_text(path: Path) -> str | None:
+    """The text of a file, or None when it cannot be read (the loaders turn None into a friendly problem sentence).
+
+    errors="replace": a byte that is not valid UTF-8 becomes "?" instead of raising: a help list must not die on one odd file.
+    """
     try:
         return Path(path).expanduser().read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -121,6 +160,9 @@ def first_line(text: str) -> str:
 # --------------------------------------------------------------------------- #
 # aliases
 # --------------------------------------------------------------------------- #
+# ---- topic 1: aliases -----------------------------------------------------------------------
+# We ASK the shell (`zsh -ic alias`) because only the shell knows which aliases are really active (some come from
+# plugins, not from your file). The comments you wrote above each alias are read separately from help.aliases_file.
 def parse_alias_output(text: str) -> dict:
     """The output of `alias`:   ll='ls -la'   or   gs=git\\ status   ->  {"ll": "ls -la", ...}."""
     aliases = {}
@@ -135,6 +177,7 @@ def parse_alias_output(text: str) -> dict:
     return aliases
 
 
+# Matches a definition line such as:  alias ll='ls -la'   or   alias -g G='| grep'   (group 1 = the name).
 ALIAS_DEFINITION = re.compile(r"^\s*alias\s+(?:-\w+\s+)?([^=\s]+)=")
 
 
@@ -164,6 +207,7 @@ def alias_rows(config, runner) -> tuple:
 # --------------------------------------------------------------------------- #
 # functions
 # --------------------------------------------------------------------------- #
+# Matches the first line of a shell function:  name() {   or   function name {   (group 1 = name; names starting with _ are skipped later)
 FUNCTION_START = re.compile(r"^(?:function\s+)?([A-Za-z0-9][\w.:+-]*)\s*(?:\(\s*\))?\s*\{\s*(?:#.*)?$")
 
 
@@ -191,6 +235,8 @@ def function_blocks(text: str) -> list:
     return found
 
 
+# function_rows: read the file as TEXT (no shell needed), cut it into function blocks, summarise each by its comment (or its
+# first code line). `sorted(rows, key=lambda r: r.title)` alphabetical.
 def function_rows(config, runner) -> tuple:
     text = read_text(config.help_functions_file)
     if text is None:
@@ -206,6 +252,9 @@ def function_rows(config, runner) -> tuple:
 # --------------------------------------------------------------------------- #
 # aerospace
 # --------------------------------------------------------------------------- #
+# aerospace_rows: AeroSpace's config is TOML, a settings format Python 3.11+ reads with `tomllib` (standard library).
+# It becomes nested dicts: data["mode"]["main"]["binding"] = {"alt-h": "focus left", ...}. We list every binding and
+# every [[on-window-detected]] rule. `x or {}` guards against a section that exists but is empty (None).
 def aerospace_rows(config, runner) -> tuple:
     path = Path(config.help_aerospace_config).expanduser()
     if tomllib is None:
@@ -250,6 +299,8 @@ def espanso_rows(config, runner) -> tuple:
 # --------------------------------------------------------------------------- #
 # skills
 # --------------------------------------------------------------------------- #
+# A "front matter" is the block between two --- lines at the TOP of a Markdown file (name:, description:). re.S lets `.`
+# match newlines so the pattern can span several lines; `\A` = the very start of the text.
 FRONT_MATTER = re.compile(r"\A---\s*\n(.*?)\n---(?:\s|\Z)", re.S)
 
 
@@ -286,6 +337,9 @@ def skill_rows(config, runner) -> tuple:
 # --------------------------------------------------------------------------- #
 # keys: the sec_<name>() cheat sheets of help.sh
 # --------------------------------------------------------------------------- #
+# The "keys" topic reads YOUR cheat sheets: shell functions named sec_<name>() { echo "..." ... } in help.sh.
+# SECTION grabs name and body (re.S: . matches newlines; re.M: ^ and $ match at every line). ECHO_LINE unwraps  echo "text";
+# ANSI removes terminal colour codes (\033[1;31m ...) so the text is readable in the launcher.
 SECTION = re.compile(r"^sec_(?P<name>\w+)\s*\(\)\s*\{(?P<body>.*?)^\}", re.S | re.M)
 ECHO_LINE = re.compile(r"""^\s*(?:echo|printf)(?:\s+-\w+)*\s+(['"])(?P<text>.*)\1\s*$""")
 ANSI = re.compile(r"(\\033|\\e|\\x1b)\[[0-9;]*m|\x1b\[[0-9;]*m")
@@ -345,6 +399,8 @@ def script_rows(config, runner) -> tuple:
 # --------------------------------------------------------------------------- #
 # system
 # --------------------------------------------------------------------------- #
+# `_out` runs ONE command through the injected runner and returns its text, or "not installed" / "unknown". It is what
+# makes system_rows testable: the test's fake runner answers `sw_vers`, `uname`, ... with canned text.
 def _out(runner, command) -> str:
     try:
         done = runner(command)
@@ -379,17 +435,17 @@ def launcher_rows(config, runner) -> tuple:
     rows = [Row("hotkey", "hotkey", "+".join(config.hotkey_modifiers) + "+" + config.hotkey_key, "Shows or hides the window.", "")]
     for e in mycatalog.entries(config):
         title = e.word or "terminal"
-        twin = f"   ⌨ {e.cli.split('  ·  ')[0].strip()}" if e.cli else "   (launcher only)"
+        twin = f"   ⌨ {e.cli.removeprefix('CLI: ').split('  ·  ')[0].strip()}" if e.cli else "   (launcher only)"
         lines = [e.summary, ""]
-        if e.launcher:
-            lines += ["In the launcher:", f"  {e.launcher}"]
-        if e.cli:
-            lines += ["In a terminal:", f"  {e.cli}"]
+        lines += ["In the launcher window (GUI):", f"  {e.launcher.removeprefix('GUI: ')}" if e.launcher else "  (not available in the launcher: use the terminal)"]
+        lines += ["In a terminal (CLI, `ml ...`):", f"  {e.cli.removeprefix('CLI: ')}" if e.cli else "  (not available in the terminal: use the launcher)"]
+        if mycatalog.example_of(e.word):
+            lines += ["", "Example:", f"  {mycatalog.example_of(e.word)}"]
         if e.text:
             lines += ["", e.text]
         if e.section:
             lines += ["", f"Settings: the `{e.section}` section of conf/myconfiguration.json"]
-        rows.append(Row(f"cmd:{title}", title, e.summary + twin, "\n".join(lines), e.cli.split("  ·  ")[0].replace("ml ", "ml ", 1).strip() if e.cli else ""))
+        rows.append(Row(f"cmd:{title}", title, e.summary + twin, "\n".join(lines), e.cli.removeprefix("CLI: ").split("  ·  ")[0].strip() if e.cli else ""))
     for link in config.quicklinks:
         rows.append(Row(f"link:{link.keyword}", link.keyword, f"web search: {link.title}", f"{link.keyword} <text>   opens {link.url}", ""))
     for key, what in (("↓ ↑", "move"), ("Tab", "complete"), ("Enter", "do / open details"), ("Esc", "back / close")):
@@ -461,6 +517,7 @@ def about_rows(config, runner) -> tuple:
     return rows, ""
 
 
+# THE PHONE BOOK of topics (same idea as ACTIONS in myactions.py): topic name -> loader function.
 LOADERS = {
     "aliases": alias_rows, "functions": function_rows, "aerospace": aerospace_rows, "espanso": espanso_rows,
     "skills": skill_rows, "keys": keys_rows, "scripts": script_rows, "system": system_rows, "launcher": launcher_rows, "screenshot": screenshot_rows, "about": about_rows,
@@ -470,6 +527,9 @@ LOADERS = {
 # --------------------------------------------------------------------------- #
 # the cache for the slow topics
 # --------------------------------------------------------------------------- #
+# The cache: `zsh -ic alias` takes ~1 s (it starts a whole interactive shell). So the rows of the slow topics (CACHED) are
+# stored in a JSON file with the time they were made, and reused for help.cache_seconds. `ml help --refresh` ignores it.
+# `asdict(row)` (dataclasses) turns a Row into a dict; `Row(**r)` rebuilds it (** unpacks the dict into keyword arguments).
 def _cache_load(config) -> dict:
     try:
         data = json.loads(Path(config.help_cache_file).read_text(encoding="utf-8"))
@@ -492,7 +552,12 @@ def _cache_store(config, topic: str, rows: list) -> None:
 
 
 def load_rows(config, topic: str, runner, refresh: bool = False) -> tuple:
-    """(rows, problem) of a topic. `problem` is empty when all is well."""
+    """(rows, problem) of a topic. `problem` is empty when all is well.
+
+    The decision: topic is slow AND caching is on AND not --refresh AND a young enough entry exists -> return it.
+    Otherwise run the loader, and store the rows if there are any. `except TypeError: pass` = "the cache has an old
+    format (a field was added): ignore it and rebuild" - a cache must never be a source of errors.
+    """
     use_cache = topic in CACHED and config.help_cache_seconds > 0
     if use_cache and not refresh:
         entry = _cache_load(config).get(topic)
@@ -510,6 +575,9 @@ def load_rows(config, topic: str, runner, refresh: bool = False) -> tuple:
 # --------------------------------------------------------------------------- #
 # rows -> launcher items, and the search
 # --------------------------------------------------------------------------- #
+# Part 5: from Rows to what the window shows. A help row's action is `copy_snippet`: Enter copies its text (the window first
+# shows the `detail` pane). The `keywords` are the subtitle and the first 400 characters of the detail, so you can find a
+# row by words that are INSIDE its text, not only in its title.
 def row_item(config, topic: str, row: Row) -> Item:
     icon, _, label = TOPICS[topic]
     return Item(
@@ -532,6 +600,9 @@ def problem_item(config, topic: str, problem: str) -> Item:
                 complete=f"{config.help_word} ", subtitle=problem, icon="⚠️", badge="Fix")
 
 
+# parse_help_query splits what was typed with a REGULAR EXPRESSION made of three optional parts: the first word (`help`),
+# a second word (the topic or a command), then the rest. (\s* = spaces, \S+ = a run of non-space characters.) It returns
+# (topic, filter text, how many characters to colour). `help timer` is special: a command word shows ITS row of `help launcher`.
 def parse_help_query(config, query: str) -> tuple:
     """"help zsh_alias ll" -> ("aliases", "ll", end) ; "help al" -> ("", "al", end_of_word).
 
@@ -556,6 +627,11 @@ def parse_help_query(config, query: str) -> tuple:
 
 
 def help_search(config, query: str, runner, refresh: bool = False, **options) -> list:
+    """The rows to show for what was typed after `help`: the topics, or the rows of one topic filtered by the rest.
+
+    `**options` collects extra keyword arguments (ignore_accents, fuzzy...) and passes them on to rank().
+    `choose` is a function defined INSIDE help_search so it can see `rest` and `limit` without taking them as parameters.
+    """
     topic, rest, _ = parse_help_query(config, query)
     limit = config.max_browse_results
 

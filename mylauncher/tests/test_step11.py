@@ -93,6 +93,7 @@ class SecretNotifyAndVault(CliCase):
         self.config = str(self.write_config(support.good_config([self.tmp / "Applications"], secret={"file": str(self.secret), **secret})))
 
     def test_vault_row_and_detail_have_the_notes(self):
+        self.runner = support.FakeKeychain()
         code, out, _ = self.call("search", "secret", "--json")
         rows = {r["title"]: r for r in json.loads(out)["results"]}
         self.assertIn("recovery: 1234", rows["private_vault"]["detail"])
@@ -104,17 +105,17 @@ class SecretNotifyAndVault(CliCase):
         self.assertEqual([r["title"] for r in json.loads(self.call("search", "secret all", "--json")[1])["results"]][:1], ["all"])
 
     def test_secret_google_copies_and_the_notification_shows_the_value(self):
-        runner = support.FakeRunner()
+        runner = support.FakeKeychain()
         code, out, _ = self.call("run", "secret GOOGLE", "--yes", "--json", runner=runner)
         self.assertEqual(runner.inputs[0], "my_password_google")
-        self.assertTrue(any("my_password_google" in " ".join(c) for c in runner.calls[1:]), runner.calls)
+        self.assertTrue(any("my_password_google" in " ".join(c) for c in runner.calls if c[0] != "security"), runner.calls)
         self.assertNotIn("my_password_google", out)  # the JSON for the window stays clean
 
     def test_the_value_can_be_kept_out_of_the_notification(self):
         self.set_config(notify_value=False)
-        runner = support.FakeRunner()
+        runner = support.FakeKeychain()
         self.call("run", "secret GOOGLE", "--yes", "--json", runner=runner)
-        self.assertFalse(any("my_password_google" in " ".join(c) for c in runner.calls[1:]))
+        self.assertFalse(any("my_password_google" in " ".join(c) for c in runner.calls if c[0] != "security"))
 
     def test_the_all_row_is_not_put_in_a_notification(self):
         runner = support.FakeRunner()
@@ -144,7 +145,7 @@ class SecretSet(CliCase):
         self.use("hidden")
         code, out, _ = self.call("secret-set", "google", "my_password_google")
         self.assertEqual((code, self.calls[0][-2:]), (0, ["-w", "my_password_google"]))
-        self.assertIn("google=keychain", self.secret.read_text())
+        self.assertRegex(self.secret.read_text(), r"(?m)^google=$")
 
     def test_hidden_lets_security_ask(self):
         self.use("hidden")

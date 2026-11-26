@@ -18,6 +18,16 @@ Before comparing, both sides are normalised: lower case, no accents, single spac
 gives us the "lowercase to make it easy" behaviour: typing "OBS", "Obs" or "obs" is the same.
 
 Each item is tried with its title AND its keywords ("power off" finds Shutdown); the best score wins.
+
+GUIDED TOUR: five small functions, from the smallest to the one everybody calls.
+  normalize()       "  Café  OBS " -> "cafe obs"           (make two texts comparable)
+  _is_subsequence() "sfr" in "safari" -> True               (the trick behind fuzzy matching)
+  score_text()      ONE query against ONE text -> a number from the table above
+  rank()            every Item against the query -> a sorted list of Match   <- the one the launcher calls
+  complete()        what Tab writes
+and split_prefix(), which cuts "yt lofi" into ("yt", "lofi") for the quicklinks.
+Worked example: query "obs" against the item "Run Obsidian": a WORD of the title starts with "obs" -> 60. With a usage
+bonus of 4 (you ran it twice) -> 64: it rises among equal matches, but an item whose title STARTS with "obs" (80) still wins.
 """
 
 from __future__ import annotations
@@ -45,6 +55,8 @@ def normalize(text: str, ignore_accents: bool = True) -> str:
 
 def _is_subsequence(query: str, text: str) -> bool:
     """True if the letters of `query` appear in `text` in the same order (not necessarily together)."""
+    # Trick: `letter in remaining` on an ITERATOR consumes it up to the first match. So each letter is searched only in
+    # what is left after the previous letter was found; `all(...)` is True when every letter was found in order.
     remaining = iter(text)  # an iterator remembers where it is, so each letter is searched AFTER the previous one
     return all(letter in remaining for letter in query)
 
@@ -91,6 +103,8 @@ def rank(items, query: str, limit: int | None = None, ignore_accents: bool = Tru
         best = max(score_text(wanted, normalize(t, ignore_accents), fuzzy) for t in texts)
         if best > 0:
             matches.append(Match(item, best + (bonus(item) if bonus else 0)))
+    # Sort with a KEY: Python compares the tuples element by element. (-score) puts the highest score first (a minus
+    # sign flips the order); `kind != "command"` is False (0) for commands, so they come before True (1); then A-Z.
     # Sort: higher score first; on a tie, commands before apps; then alphabetical.
     matches.sort(key=lambda m: (-m.score, m.item.kind != "command", normalize(m.item.title, ignore_accents)))
     return matches if limit is None else matches[:limit]

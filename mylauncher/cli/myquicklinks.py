@@ -17,6 +17,18 @@ The file is a list; each entry has two required fields and one optional:
   icon     optional emoji shown at the start of the row; default 🔎.
 
 How you use it:   yt   (then Space or Tab)   lofi beats   (then Enter)
+
+GUIDED READING (top to bottom):
+  Quicklink          a frozen dataclass: ONE checked entry (keyword, url, title, icon).
+  site_name(url)     "https://www.youtube.com/x" -> "youtube.com" (urlsplit cuts a URL in parts; .hostname is the domain).
+  build_url          the clever little function: put the text where {query} is, or at the end.
+  parse_quicklinks   CHECK the data read from JSON, entry by entry, with a message that says WHICH entry is wrong.
+  load_quicklinks    read the file, turn text into data, call parse_quicklinks. Missing file = no quicklinks (not an error).
+
+Why `quote_plus`? A URL cannot contain spaces or symbols: "c++ & rust" must travel as "c%2B%2B+%26+rust". quote_plus does
+that, so a search for "lo fi" never breaks the address and nothing typed can add extra parts to the URL.
+Example:   build_url(Quicklink("yt", "https://www.youtube.com/results?search_query={query}", "youtube.com"), "lo fi")
+           -> "https://www.youtube.com/results?search_query=lo+fi"
 """
 
 from __future__ import annotations
@@ -33,10 +45,10 @@ PLACEHOLDER = "{query}"
 
 @dataclass(frozen=True)
 class Quicklink:
-    keyword: str
-    url: str
-    title: str
-    icon: str = ""
+    keyword: str  # what you type first, always lower case
+    url: str  # the address, with or without {query}
+    title: str  # shown in the list (defaults to the site name)
+    icon: str = ""  # an emoji, or "" for the default
 
 
 def site_name(url: str) -> str:
@@ -53,7 +65,13 @@ def build_url(link: Quicklink, query: str) -> str:
 
 
 def parse_quicklinks(data, where: str = "quicklinks.json", reserved=()) -> tuple:
-    """Check the content read from the JSON file. `reserved` = words that cannot be keywords (like "kill")."""
+    """Check the content read from the JSON file. `reserved` = words that cannot be keywords (like "kill").
+
+    Every check is the same three lines: IS IT THE RIGHT TYPE / SHAPE? -> if not, raise ConfigError with a message that names
+    the exact entry (`quicklinks.json[2].url must be ...`). `enumerate(data)` gives (0, first), (1, second)... so we can
+    say which entry. `seen` is a set (a bag without duplicates) used to catch a keyword used twice. The check
+    `url.startswith(("http://", "https://"))` (a tuple = "any of these") refuses `javascript:` and `file:` addresses.
+    """
     if not isinstance(data, list):
         raise ConfigError(f"{where} must be a list [ {{...}}, {{...}} ]")
     links, seen = [], set()
@@ -84,7 +102,12 @@ def parse_quicklinks(data, where: str = "quicklinks.json", reserved=()) -> tuple
 
 
 def load_quicklinks(path, reserved=()) -> tuple:
-    """Read conf/quicklinks.json. A missing file means "no quicklinks" (it is optional)."""
+    """Read conf/quicklinks.json. A missing file means "no quicklinks" (it is optional).
+
+    `raise ... from None` hides the original technical traceback so the user sees ONE clear sentence. We catch
+    FileNotFoundError BEFORE OSError because the first is a special case of the second: Python tries `except` clauses
+    in order and the first that fits wins.
+    """
     path = Path(path)
     try:
         text = path.read_text(encoding="utf-8")

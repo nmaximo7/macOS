@@ -63,7 +63,7 @@ def bring_to_front(runner=subprocess.run, pid: int | None = None) -> None:
 
 
 # After these kinds of rows the window says what happened (a copy, a started command...); opening an app needs no message.
-TOAST_KINDS = ("snippet", "help", "secret", "execute", "edit", "kill")
+TOAST_KINDS = ("snippet", "help", "secret", "execute", "edit", "kill", "emoji", "emoji_fav")
 SHOW_RESULT_IDS = ("cmd:weather",)  # after these the answer stays on screen (like a help row) instead of closing the window
 HINT = "↩ open     ⇥ complete     ⎋ close"
 DETAIL_HINT = "↩ copy     ↑ ↓ scroll     ⎋ back to the list"
@@ -289,7 +289,7 @@ class LauncherWindow:
         if result.ok:
             self.hide()
             print("[run] window hidden", flush=True)
-            if item["kind"] == "snippet" and self.config.expander_paste:
+            if (item["kind"] == "snippet" and self.config.expander_paste) or (item["kind"] == "emoji" and self.config.emoji_paste):
                 self.root.after(self.config.expander_paste_delay_ms, self._paste)
             if self.toast and item["kind"] in TOAST_KINDS and result.message:
                 self.toast.show(f"✔  {result.message}")
