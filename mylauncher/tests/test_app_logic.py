@@ -230,7 +230,7 @@ class Hotkey(unittest.TestCase):
         with mock.patch.dict(sys.modules, {"pynput": None, "Quartz": None}):
             with self.assertRaises(RuntimeError) as ctx:
                 HotkeyListener(("command",), "d", lambda: None).start()
-        self.assertIn("keyboard tap", str(ctx.exception))
+        self.assertIn("Quartz", str(ctx.exception))  # Step 20.15: the missing library is NAMED (it used to say "keyboard tap ... permission?")
 
     def test_tap_switched_off_by_macos_is_switched_on_again(self):
         import sys

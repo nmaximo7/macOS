@@ -14,20 +14,29 @@ It is deliberately NOT a borderless window ("overrideredirect" in tkinter): such
 the keyboard on macOS, and a launcher you cannot type into is no use.
 
 If PyObjC is missing or anything fails, we say so and keep the normal window: it still works.
+
+GUIDED TOUR: this file is a BRIDGE to the Mac's own window system. Background:
+  tkinter draws the window CONTENT, but the frame around it (title bar, buttons) belongs to macOS. Every macOS window is an NSWindow object (Cocoa, written in
+  Objective-C). PyObjC lets Python call those objects. Objective-C method names look odd to a Python eye: `setTitleVisibility_(1)` is `setTitleVisibility:`
+  with an argument (each colon becomes an underscore).
+  hex_to_rgb      now lives in mytheme.py (shared with the toast and the timer display); it is imported here, so `from mychrome import hex_to_rgb` still works.
+  apply_style     find OUR window among all windows of the app by its title, then call the Cocoa setters. The NS_* constants are Apple's numbers (magic numbers
+                  copied from Apple's documentation; they are named here so the code reads).
+  default_style   only on macOS (sys.platform == "darwin"); on Linux (the tests) it returns False.
+The `appkit` PARAMETER is dependency injection again: a test passes a fake AppKit and checks which setters were called, with no Mac. The big `except Exception`
+is deliberate and marked: Objective-C errors come in many types, and a missing decoration must never stop a launcher.
+Not tested on a real Mac in this project's test-suite beyond the fake; if the title bar looks wrong, the log line "window style:" says why.
 """
 
 from __future__ import annotations
 
 import sys
 
+from mytheme import hex_to_rgb  # noqa: F401 - the one shared copy; still importable from here (tests, older code)
+
 NS_WINDOW_TITLE_HIDDEN = 1
 NS_BUTTONS = (0, 1, 2)  # NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton
 NS_FLOATING_WINDOW_LEVEL = 3
-
-
-def hex_to_rgb(color: str) -> tuple:
-    """"#ff9f0a" -> (1.0, 0.62, 0.04): the 0..1 numbers Cocoa wants."""
-    return tuple(int(color[i : i + 2], 16) / 255 for i in (1, 3, 5))
 
 
 def apply_style(title: str, background: str, appkit=None, log=print) -> bool:

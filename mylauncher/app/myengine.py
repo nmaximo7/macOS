@@ -11,6 +11,16 @@ and reads the JSON that comes back. This is the "clear separation" rule of the p
 always reproduce what the window does by typing the same line in Terminal.
 
 The `runner` argument (default: subprocess.run) can be replaced in tests by a fake one.
+
+GUIDED TOUR: this is the SMALLEST and MOST IMPORTANT file of app/. It is the whole "connection" between the skin (the window) and the engine (cli/).
+  Engine._call   builds the command line as a LIST of words, runs it as a separate process, and decodes the JSON from its standard output.
+  Engine.search  `search --json -- TEXT`  -> {"query", "completion", "results": [...], "mode", "highlight"}
+  Engine.run     `run --json --id ID --yes [--text=T] [--force]` -> RunResult(ok, message, needs_force)
+  RunResult      a frozen dataclass (an immutable record, like Item in chapter 1). EngineError: our own error for "could not talk to the engine".
+WHY A SEPARATE PROCESS FOR EVERY KEYSTROKE? Because it keeps the two halves honest: the window cannot "cheat" by calling engine code directly, so everything the
+window can do you can also type in Terminal (and test there). The price is about a tenth of a second of Python start-up, which is why the engine's start-up
+is kept light. The 15-second TIMEOUT protects the window: a stuck engine becomes an error row, not a frozen launcher.
+Try it:   python3 cli/mylauncher.py search --json -- obs | head -c 400     (exactly what the window reads)
 """
 
 from __future__ import annotations
@@ -47,11 +57,14 @@ class Engine:
 
     def _call(self, subcommand: str, *rest) -> dict:
         """Run `mylauncher.py <subcommand> --json [--config F] <rest>` and return the JSON as a dictionary."""
+        # `self.python` is sys.executable: the SAME Python that runs the window also runs the engine (so the same venv and the same installed libraries).
+        # The command is a list, never one string glued together: no shell is involved, so a typed text can never be interpreted as shell commands.
         command = [self.python, self.script, subcommand, "--json"]
         if self.config_path:
             command += ["--config", str(self.config_path)]
         command += rest
         try:
+            # capture_output=True keeps stdout/stderr for us instead of printing them; text=True gives str instead of bytes; timeout kills a stuck process.
             done = self.runner(command, capture_output=True, text=True, timeout=TIMEOUT)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise EngineError(f"cannot run the engine: {exc}") from None
@@ -60,6 +73,7 @@ class Engine:
         try:
             return json.loads(done.stdout)
         except json.JSONDecodeError:
+            # `[-1:]` is a slice of the LAST line (or an empty list for no output): error messages put the useful part at the end.
             detail = (done.stderr or done.stdout or "no output").strip().splitlines()[-1:]
             raise EngineError(f"the engine answered something unexpected: {detail[0] if detail else ''}") from None
 

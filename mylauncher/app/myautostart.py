@@ -7,8 +7,9 @@ myautostart.py - start mylauncher automatically when you log in (a macOS "launch
     app/mylauncher-autostart status      is it loaded? running? which process?
     app/mylauncher-autostart logs        the last lines of the log file
     app/mylauncher-autostart restart     stop and start it (after editing the configuration)
+    app/mylauncher-autostart stop        stop it and keep it stopped until the next login (use before shutting down: see below)
     app/mylauncher-autostart uninstall   stop it and remove the agent
-Option: --dry-run (install / uninstall / restart: show, do nothing), --config FILE.
+Option: --dry-run (install / uninstall / restart / stop: show, do nothing), --config FILE.
 
 How it works. macOS has a program called launchd that starts and watches programs for you. You
 describe a program in a small XML file (a "property list", .plist) saved in ~/Library/LaunchAgents/;
@@ -25,6 +26,23 @@ and talk to launchd with the command `launchctl`:
 PERMISSIONS CHANGE when launchd starts us. Started from Ghostty, macOS credits the permissions
 (Accessibility, Input Monitoring) to Ghostty. Started by launchd there is no terminal, so they
 are checked against the Python program itself. `install` prints which file to add.
+
+GUIDED TOUR: a program that EDITS THE SYSTEM, so it is written to be safe to look at first (`show`, `--dry-run`).
+  plist_path / build_plist   WHAT to write: a launch-agent description as a Python dict. plistlib.dumps turns the dict into Apple's XML. One key per line, each
+                             commented in the code; the three to remember: ProgramArguments (the command), RunAtLoad (start now and at login), KeepAlive.
+  Autostart                  one class; every action returns a LIST OF LINES to print (so tests compare text and nothing is printed from inside).
+                             domain / service / file / log_file are @property: computed names, never stored twice.
+                             _launchctl is the ONLY method that runs a program; in --dry-run it returns "would run: ..." and runs nothing.
+                             install, uninstall, restart, status, logs: the six commands of the header.
+  make_parser / main         argparse with `choices=[...]` (an unknown command is refused by argparse itself). `getattr(auto, args.command)()` calls the method
+                             NAMED by the typed word: "install" -> auto.install(). Short, but it only works because the choices were validated first.
+THE LESSON OF KeepAlive: {"SuccessfulExit": False} = "restart me if I exit with an ERROR or crash; leave me stopped if I exit cleanly (code 0)". That is why
+mylauncher_app.py ignores quit requests and exits with 0 only on purpose (see chapter 14): a clean exit must mean "the user asked for it".
+THE LESSON OF PERMISSIONS: macOS grants Accessibility / Input Monitoring to a PROGRAM. Started from your terminal, the permission is the terminal's; started by
+launchd, it is the Python binary's, so install prints that file (`real_python` resolves the .venv link with os.path.realpath, because the permission is checked on
+the REAL file).
+Try it (safe, changes nothing):   app/mylauncher-autostart show        or        app/mylauncher-autostart install --dry-run
+Not tested on a real Mac here: only with a fake `launchctl` runner.
 """
 
 from __future__ import annotations
@@ -50,6 +68,7 @@ def plist_path(config, home: Path | None = None) -> Path:
 
 def build_plist(config, python: str, config_path: Path) -> dict:
     """The content of the agent file, as a dictionary (plistlib turns it into XML)."""
+    # `Path / "name"` joins path pieces with the right separator. The same log file receives stdout and stderr (StandardOutPath and StandardErrorPath below).
     log = str(config.autostart_log_dir / "mylauncher.log")
     agent = {
         "Label": config.autostart_label,
@@ -128,12 +147,15 @@ class Autostart:
     def install(self) -> list:
         lines = []
         if self.dry_run:
+            # `lines += [a, b]` appends several items to a list. plistlib.dumps returns BYTES; .decode() turns them into text so it can be printed.
             lines += [f"would write {self.file}", self.plist_bytes().decode()]
         else:
             self.config.autostart_log_dir.mkdir(parents=True, exist_ok=True)
             self.file.parent.mkdir(parents=True, exist_ok=True)
             self.file.write_bytes(self.plist_bytes())
             lines.append(f"wrote {self.file}")
+        # Re-installing: if an older version is already loaded, launchctl bootstrap would fail ("already loaded"), so we bootout first. `_launchctl(...)[1]`
+        # takes the SECOND item of the (done, text) pair it returns: the sentence to show.
         if not self.dry_run and self.is_loaded():  # re-installing: unload the old version first
             lines.append(self._launchctl("bootout", self.service)[1])
         done, text = self._launchctl("bootstrap", self.domain, str(self.file))
@@ -147,6 +169,19 @@ class Autostart:
             f"    {real_python(self.python)}",
             f"Then:  {Path(sys.argv[0]).name} restart      and look at:  logs",
         ]
+        return lines
+
+    def stop(self) -> list:
+        """Unload the agent (SIGTERM: the launcher leaves cleanly, exit 0) but KEEP the file: it comes back at the next login.
+
+        WHY THIS EXISTS (Step 20.16, a real bug): a script that force-kills the launcher (`pkill -9 python`) before a shutdown makes launchd start a NEW copy
+        at once, because the agent has KeepAlive {SuccessfulExit: false} = "restart me after a crash", and being killed by a signal IS a crash. The new copy ignores
+        macOS's quit request, and the shutdown stops at "Python" in Force Quit. `stop` tells launchd "this one is wanted off", so nothing restarts it.
+        """
+        if not self.dry_run and not self.is_loaded():
+            return ["not loaded: nothing to stop"]
+        lines = [self._launchctl("bootout", self.service)[1]]
+        lines.append("stopped; it starts again at the next login (or: install / restart)")
         return lines
 
     def uninstall(self) -> list:
@@ -176,6 +211,8 @@ class Autostart:
             return [*lines, "launchd: not loaded (it will start at the next login if the file exists)"]
         info = {}
         for line in done.stdout.splitlines():
+            # str.partition(" = ") cuts at the FIRST " = " and returns (before, the separator, after); `sep` is empty if it was not found, so `if sep and ...`
+            # skips every line that is not "key = value". We keep only four keys of launchctl's long report.
             key, sep, value = line.strip().partition(" = ")
             if sep and key in ("state", "pid", "last exit code", "runs"):
                 info[key] = value
@@ -191,7 +228,7 @@ class Autostart:
 
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mylauncher-autostart", description="start mylauncher at login")
-    parser.add_argument("command", choices=["show", "install", "uninstall", "restart", "status", "logs"])
+    parser.add_argument("command", choices=["show", "install", "uninstall", "restart", "stop", "status", "logs"])
     parser.add_argument("--config", metavar="FILE")
     parser.add_argument("--dry-run", action="store_true", help="show what would happen, do nothing")
     return parser

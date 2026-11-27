@@ -10,6 +10,16 @@ THE FIX. Espanso accepts one config file per application. This one switches Espa
 whose title is the launcher's title:
 
     <espanso folder>/config/mylauncher.yml
+
+GUIDED READING: four small functions around one idea - generate a tiny config file and put it where Espanso looks.
+  config_text()   the YAML text. `filter_title` is a regular expression matched against the window title; `^...$` = the WHOLE title,
+                  `re.escape` makes characters like ( or . literal, and ' is doubled because YAML single-quoted strings escape it that way.
+                  `enable: false` = switch Espanso off for that window.
+  config_dir()    find Espanso's config folder starting from the snippets folder and looking at it and its parents
+                  (`(folder, *folder.parents)` = the folder first, then each ancestor up to the root).
+  status()        the check `ml doctor` shows: is the file there and does it name our window?  Returns (ok, message).
+  install()       write the file. Returns (ok, message) - never raises: a read-only folder becomes a message.
+The (ok, message) pair is this project's usual way to report a result without exceptions. Try:  ml espanso-config   then   ml doctor
 """
 
 from __future__ import annotations

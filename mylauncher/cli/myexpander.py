@@ -29,6 +29,22 @@ The cursor marker $|$ (where Espanso puts the cursor) is removed, because a clip
 
 YAML is not part of Python's standard library, so this one module needs PyYAML (it is in
 app/requirements.txt). If it is missing the launcher still works, just without snippets.
+
+GUIDED TOUR (top to bottom) ----------------------------------------------------------------------------------------------------
+  Snippet / Scan          the shapes: ONE usable snippet, and the REPORT of a whole scan (snippets + everything skipped, and why).
+  find_yaml_files()       walk the folder tree and list the .yml/.yaml files.
+  yaml_loader()           a function text -> data, or None if PyYAML is missing (so the launcher still works without it).
+  parse_matches()         ONE file's data -> snippets. The heart of the file. NEVER raises: a strange entry is counted and skipped.
+  load_snippets()         the whole folder: files -> parse_matches -> remove duplicate triggers -> a Scan.
+  preview(), group_of(), describe_groups()   presentation helpers (one-line preview; ";p" groups like ";p" = prompts).
+
+THE DESIGN RULE: "be liberal in what you read". Your snippet folder is also Espanso's, written for another program. We only take what we
+fully understand (a trigger and a plain-text replace) and COUNT the rest, with the reason, so `ml doctor` can say "12 skipped: has {{...}}".
+We never guess (a snippet with a clipboard variable would copy the literal text "{{clipboard}}", which is worse than not offering it).
+Example of ONE entry becoming ONE Snippet:
+
+    - trigger: ";bsite"                 ->   Snippet(trigger=";bsite", text="https://justtothepoint.com/", label="", source="bookmark.yml")
+      replace: "https://justtothepoint.com/"
 """
 
 from __future__ import annotations
@@ -53,6 +69,8 @@ class Snippet:
     source: str = ""  # file name, for messages
 
 
+# Scan is NOT frozen: we fill it in while we scan (scan.skipped += 1). `field(default_factory=list)` gives every Scan its OWN empty
+# list. (Writing `snippets: list = []` would share ONE list between all Scans: a classic Python trap, which dataclasses refuse.)
 @dataclass
 class Scan:
     """The result of reading the folder: the snippets, and everything we could not use (with why)."""
@@ -69,6 +87,8 @@ class Scan:
 def find_yaml_files(folder: Path) -> list:
     """All .yml/.yaml files below `folder`, sorted, skipping folders that start with a dot."""
     found = []
+    # os.walk visits the folder, then each sub-folder... `dirs[:] = ...` edits the list IN PLACE: os.walk then only descends into the
+    # folders we kept (so ".git" is never entered) and in sorted order (the same result on every Mac).
     for root, dirs, files in os.walk(folder):
         dirs[:] = sorted(d for d in dirs if not d.startswith("."))
         found += [Path(root) / name for name in sorted(files) if name.lower().endswith(YAML_SUFFIXES) and not name.startswith(".")]
@@ -85,6 +105,7 @@ def yaml_loader():
         import yaml
     except ImportError:
         return None
+    # getattr(obj, "name", default): the attribute if it exists, else the default (not every install has the fast C version).
     loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
     return lambda text: yaml.load(text, Loader=loader)  # noqa: S506  (safe loader)
 
@@ -94,7 +115,15 @@ def clean_text(text: str, strip_cursor: bool = True) -> str:
 
 
 def parse_matches(data, source: str = "", strip_cursor: bool = True, notes: list | None = None) -> tuple:
-    """data = what the YAML file contained. Returns (snippets, skipped_count). Never raises."""
+    """data = what the YAML file contained. Returns (snippets, skipped_count). Never raises.
+
+    For each entry of `matches:` the steps are (read the code with this list beside it):
+      1. is it a dict? (else skip)                      2. triggers: `triggers: [..]` or a single `trigger:` -> a clean list of texts
+      3. text = `replace` (a bare number like 42 becomes "42")
+      4. "dynamic"? = has `vars`, `form`, or a {{variable}} in the text -> Espanso must evaluate it -> skip, and WRITE DOWN why
+      5. otherwise ONE Snippet per trigger (an entry with two triggers gives two snippets with the same text).
+    `isinstance(x, (int, float)) and not isinstance(x, bool)`: in Python True is an int (True == 1), so we must exclude booleans by hand.
+    """
     if not isinstance(data, dict) or not isinstance(data.get("matches"), list):
         return [], 0  # not a snippets file (Espanso config files look like this): nothing to do, not an error
     snippets, skipped = [], 0
@@ -133,10 +162,11 @@ def load_snippets(folder, strip_cursor: bool = True, loader="default") -> Scan:
     if load is None:
         scan.missing_yaml = True
         return scan
-    seen = set()
+    seen = set()  # triggers already taken: the FIRST file (in sorted order) wins, later duplicates are only counted
     for path in find_yaml_files(folder):
         try:
             data = load(path.read_text(encoding="utf-8"))
+        # One bad file must not hide all the others, so we catch broadly here (and report the first line of the error).
         except Exception as exc:  # noqa: BLE001 - YAML errors, bad encoding, unreadable file: all just "skip it"
             first_line = (str(exc).strip().splitlines() or [type(exc).__name__])[0]
             scan.problems.append(f"{path.name}: {first_line}")
@@ -171,6 +201,8 @@ def describe_groups(snippets, length: int, configured: dict) -> dict:
     group's snippets mostly live in ("bookmark.yml" -> "bookmark"), because people usually keep one
     topic per file. The icon is only what the configuration says (empty = the default).
     """
+    # `dict.setdefault(key, [])` returns the list for that key, creating an empty one the first time: a short way to GROUP things.
+    # `max(set(stems), key=stems.count)` = the most frequent file name (the "mode"): the group is named after where it mostly lives.
     members: dict = {}
     for snippet in snippets:
         members.setdefault(group_of(snippet.trigger, length), []).append(snippet)

@@ -7,6 +7,15 @@ The toast is drawn by the launcher itself, so it always works, and it needs no p
 
 It is a window with no title bar (`overrideredirect`): fine here because it only DISPLAYS something, it never
 needs the keyboard (that is why the launcher window itself cannot be borderless, see mychrome.py).
+
+GUIDED TOUR: ONE idea implemented TWICE, with a fallback.
+  native_panel   the preferred way: a real Cocoa NSPanel made with PyObjC (not dependent on the Tk window at all). Returns the panel or None.
+  Toast.show     try native_panel; if it returned None, build a Tk Toplevel window instead. Either way a timer (root.after) removes it.
+  Toast.close    cancel the timer, hide the panel, destroy the window. Calling it twice, or when nothing is shown, is harmless (each part checks "is not None").
+WHY TWO IMPLEMENTATIONS? A hard-won fact, recorded in native_panel's docstring: right after a copy the launcher HIDES its Tk window, and on macOS a Tk child
+window of a hidden window stays hidden too: the toast would never show. A Cocoa panel does not care. The Tk version stays as the fallback for when PyObjC is missing.
+This is a good general pattern: a preferred path, a plain fallback, and the fallback chosen by one `if x is not None`.
+`native` is injected (default native_panel), so tests can force either path. The geometry arithmetic in native_panel is in the comments below.
 """
 
 from __future__ import annotations
@@ -14,14 +23,9 @@ from __future__ import annotations
 import sys
 import tkinter as tk
 
-from mytheme import shorten
+from mytheme import hex_to_rgb, shorten
 
 WIDTH_CHARACTERS = 80
-
-
-def _rgb(hex_color: str):
-    h = hex_color.lstrip("#")
-    return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
 
 
 def native_panel(text: str, theme, top: int):
@@ -36,22 +40,25 @@ def native_panel(text: str, theme, top: int):
         import AppKit as ak
         label = ak.NSTextField.labelWithString_(text)
         label.setFont_(ak.NSFont.systemFontOfSize_(theme.row_size + 2))
-        label.setTextColor_(ak.NSColor.colorWithSRGBRed_green_blue_alpha_(*_rgb(theme.text), 1))
+        label.setTextColor_(ak.NSColor.colorWithSRGBRed_green_blue_alpha_(*hex_to_rgb(theme.text), 1))
         label.sizeToFit()
+        # Cocoa's screen origin is the BOTTOM-left corner (y grows upward), unlike tkinter where y grows downward. So "top" pixels from the top edge is
+        # y = screen height - top - panel height. x centres the panel: left edge of the screen + (screen width - panel width) / 2.
         pad = 18
         width, height = label.frame().size.width + 2 * pad, label.frame().size.height + 2 * pad // 1.5
         screen = ak.NSScreen.mainScreen().frame()
         x = screen.origin.x + (screen.size.width - width) / 2
         y = screen.origin.y + screen.size.height - top - height
         panel = ak.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
-            ak.NSMakeRect(x, y, width, height), 0, ak.NSBackingStoreBuffered, False)  # 0 = borderless
+            ak.NSMakeRect(x, y, width, height), 0, ak.NSBackingStoreBuffered, False)  # 0 = borderless (a "style mask" of no bits)
         panel.setLevel_(ak.NSStatusWindowLevel)
         panel.setOpaque_(False)
         panel.setHasShadow_(True)
         panel.setIgnoresMouseEvents_(True)
         panel.setReleasedWhenClosed_(False)
+        # Flags are combined with | (bitwise OR): 1 << 0 means "bit 0" and 1 << 8 "bit 8". Together: show on every Space and over full-screen applications.
         panel.setCollectionBehavior_((1 << 0) | (1 << 8))  # on every Space, also over full-screen apps
-        panel.setBackgroundColor_(ak.NSColor.colorWithSRGBRed_green_blue_alpha_(*_rgb(theme.input_background), 1))
+        panel.setBackgroundColor_(ak.NSColor.colorWithSRGBRed_green_blue_alpha_(*hex_to_rgb(theme.input_background), 1))
         label.setFrameOrigin_(ak.NSMakePoint(pad, pad // 1.5))
         panel.contentView().addSubview_(label)
         panel.orderFrontRegardless()
@@ -78,6 +85,7 @@ class Toast:
             self._timer = self.root.after(int(self.seconds * 1000), self.close)
             return
         window = tk.Toplevel(self.root)
+        # Toplevel = a second window. overrideredirect(True) = "no title bar, no manager": fine for a toast that only DISPLAYS (it never needs the keyboard).
         window.overrideredirect(True)  # no title bar, no buttons
         window.attributes("-topmost", True)
         window.configure(bg=t.selection)
@@ -89,6 +97,7 @@ class Toast:
         self._timer = self.root.after(int(self.seconds * 1000), self.close)
 
     def close(self) -> None:
+        # after_cancel cancels a pending root.after job: without it, an OLD timer from a previous toast could close a NEW toast too early.
         if self._timer is not None:
             self.root.after_cancel(self._timer)
             self._timer = None

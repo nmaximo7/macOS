@@ -15,6 +15,22 @@ We skip /System/Library/ (the Dock, Finder, loginwindow...: closing those is nev
 and the names in kill.protected (by default "python": that is this launcher itself).
 
 Pure functions here: the `runner` that runs `ps` is given from outside, so tests can pretend.
+
+GUIDED TOUR: one regular expression, one dataclass, three functions.
+  PROCESS_LINE        reads ONE line of `ps` output. Piece by piece:   ^\\s*(\\d+)\\s+(.+?\\.app)/Contents/MacOS/
+        ^\\s*            start of line, optional spaces            (\\d+)      group 1: the pid (digits)
+        \\s+             spaces                                    (.+?\\.app)  group 2: the path up to the FIRST ".app"
+        /Contents/MacOS/ the folder where an application's main program lives
+      `.+?` is "as few characters as possible" (a LAZY match): it stops at the FIRST `.app` that is followed by /Contents/MacOS/. For a helper such as
+      /A.app/Contents/Frameworks/B.app/Contents/MacOS/x the first `.app` is NOT followed by /Contents/MacOS/, so the regex keeps extending and
+      the group becomes "/A.app/Contents/Frameworks/B.app". That path contains ".app/" in the MIDDLE, and running_apps() skips every path that
+      does - which is exactly how the many "Helper" processes are left out.
+  running_apps()      lines -> {path: [pids]} -> a sorted list of RunningApp. `found.setdefault(path, []).append(pid)` groups pids by app.
+  alive()             which pids are still there? `ps -p 1,2,3 -o pid=` prints one line per process that exists: a SET of the numbers
+                      printed answers "is this pid in it?" quickly.
+  applescript_quote() escape backslash FIRST, then the double quote: if you did it the other way round the backslash added for the quote would be doubled.
+Example:  "  812 /Applications/Obsidian.app/Contents/MacOS/Obsidian --flag"  ->  RunningApp("Obsidian", "/Applications/Obsidian.app", (812,))
+Try it:   ps -axo pid=,command= | head -5     then     ml search --json -- "kill ob"
 """
 
 from __future__ import annotations

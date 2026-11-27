@@ -6,7 +6,7 @@ on disk: if you copied only part of a zip (it happened: `cli/` was old and `app/
 differs from the one in the delivery notes and `about` shows how many files there are.
 
 GUIDED READING: three constants and three functions.
-  VERSION / STEP / BUILT   plain text you edit at each delivery (0.19.8, "Step 20.5", a date).
+  VERSION / STEP / BUILT   plain text you edit at each delivery (0.19.10, "Step 20.7", a date).
   ROOT                     the project folder: this file is cli/myversion.py, so `.parent` = cli/, `.parent.parent` = project.
   python_files()           every .py of cli/ and app/, sorted (sorted = the SAME order on every Mac, essential for a hash).
   fingerprint()            a "hash": a SHA-256 digest is a long number computed from bytes; change ONE byte of ANY file
@@ -14,7 +14,7 @@ GUIDED READING: three constants and three functions.
                            characters. Two Macs with the same fingerprint have the same code, which is how you spot a
                            half-copied zip (old cli/ + new app/).
   one_line()               the sentence shown by `ml --version` and `ml about`.
-Try it:  ml --version      ->  mylauncher 0.19.8 (Step 20.5, 2026-11-26) files 41, fingerprint 1a2b3c4d
+Try it:  ml --version      ->  mylauncher 0.19.10 (Step 20.7, 2026-11-26) files 41, fingerprint 1a2b3c4d
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-VERSION = "0.19.8"
-STEP = "Step 20.5"
+VERSION = "0.19.19"
+STEP = "Step 20.16"
 BUILT = "2026-11-26"
 
 ROOT = Path(__file__).resolve().parent.parent

@@ -20,6 +20,20 @@ The file is a list. Each entry says WHAT to edit:
 
 How you use it:   edit   (then Space)   aero   (then Enter)  ->  the file opens in the editor of
 `edit.editor` in conf/myconfiguration.json.
+
+GUIDED TOUR: the file has the same shape as myquicklinks.py (chapter 7) - a frozen dataclass, a parser that checks, a loader - plus
+one new idea, WILDCARDS.
+  EditEntry                one entry of edit.json.
+  split_description()      "AeroSpace, a tiling window manager" -> ("AeroSpace", "a tiling window manager"): the words before the first
+                           comma are the NAME you search for; the rest is shown in grey. (`str.partition(",")` again.)
+  parse_text_field()       the checks shared with execute.json (description/name/emoji), in ONE place: "don't repeat yourself".
+  parse_edit(), load_edit()  check the data; read the file (a missing file = nothing to edit).
+  tidy()                   /Users/me/x -> ~/x
+  expand()                 ONE entry -> the files it stands for. Without wildcards: just the path. With `*`, `?`, `[ ]` or `**`:
+                           whatever matches NOW (the list is rebuilt each time, so a new SKILL.md appears without any setting change).
+  build_edit_items()       entries -> the rows (Items) the window shows; a missing file gets the badge "Missing" instead of failing.
+Wildcard crib:  *  any characters in one folder name   ?  one character   **  any number of folders   [ab]  a or b
+Example:  "~/macOS/claude/skills/**/SKILL.md"  ->  one row per skill, titled by the folder name (because "SKILL.md" says nothing).
 """
 
 from __future__ import annotations
@@ -48,6 +62,8 @@ def split_description(description: str) -> tuple:
     return (name.strip(), rest.strip()) if comma else (description.strip(), "")
 
 
+# NOTE the loop `for field, value in (("description", description), ...)`: a small TABLE of (name, value) pairs checked by one block of
+# code. Three near-identical `if` blocks become one. (`field` is just a variable name here, not the dataclasses function.)
 def parse_text_field(entry: dict, here: str) -> tuple:
     """Shared by edit.json and execute.json: (name, description, emoji) with the checks."""
     description = entry.get("description", "")
@@ -107,6 +123,9 @@ def tidy(path: Path) -> str:
 def expand(entry: EditEntry) -> list:
     """[(label, Path)] this entry stands for. Without wildcards: the path itself (even if it does not exist yet,
     the row then says so). With wildcards: the files that exist now, sorted, hidden ones skipped."""
+    # Algorithm: (1) no wildcard -> the path as it is. (2) else find the first wildcard character, take everything BEFORE it as the
+    # fixed "base" folder, let glob (recursive=True makes ** work) list the matches, drop any whose path (relative to base) has a
+    # part starting with "." (hidden), and give each a label (the file name, or the folder name for SKILL.md).
     pattern = str(Path(entry.path).expanduser())
     if not any(c in pattern for c in WILDCARDS):
         return [("", Path(pattern))]

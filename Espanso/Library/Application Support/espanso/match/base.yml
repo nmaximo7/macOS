@@ -12,6 +12,8 @@ matches:
     replace: "nmaximo7@gmail.com"
   - trigger: ":cvv"
     replace: "737"
+  - trigger: ":acentos"
+    replace: "ñáéíóú¿¡"
   - trigger: ":bew"
     replace: "Bupparchard Sa-ardchom"
   - trigger: ":bewDetails"

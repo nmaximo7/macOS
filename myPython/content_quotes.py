@@ -929,9 +929,88 @@ def pick_daily_quote(sources=None, rng=None):
     return (rng.choice(candidates) if candidates else None), notes
 
 
+def general_quotes(per_source: int = 2, topic: str = "", rng=None) -> list:
+    """Print general quotes taken from every source available in SOURCES and return them.
+
+    per_source: how many quotes to pick from each available source (default 2).
+    topic:      optional topic filter ("" = any/general, "maths", "technology", ...).
+    rng:        a random.Random, only for tests.
+    """
+    cfg = get_settings()
+    rng = rng or random.Random()
+    topic_obj = resolve_topic(topic)
+
+    notes, chosen, used = [], [], []
+    seen_text, seen_author = set(), set()
+
+    for name, func in SOURCES.items():
+        try:
+            found = [q for q in func(cfg, topic_obj, notes) if acceptable(q)]
+        except Exception as exc:
+            notes.append(("warn", f"{name}: failed ({type(exc).__name__}: {exc})"))
+            continue
+
+        if not found:
+            continue
+
+        # Randomize candidates (keeping on-topic ones first if a topic was given).
+        rng.shuffle(found)
+        if topic_obj.active:
+            found.sort(key=lambda q: not q.on_topic)
+
+        picked_here = []
+        for strict in (True, False):  # 2nd pass relaxes "one per author"
+            for quote in found:
+                if len(picked_here) >= per_source:
+                    break
+                key = _fingerprint(quote.text)
+                if key in seen_text:
+                    continue
+                author = quote.author.lower()
+                if strict and author and author in seen_author:
+                    continue
+                picked_here.append(quote)
+                seen_text.add(key)
+                seen_author.add(author)
+
+        if picked_here:
+            used.append(f"{name} ({len(picked_here)}/{len(found)})")
+            chosen.extend(picked_here)
+
+    header = Text()
+    header.append(f"{len(chosen)} general quote(s)", style="bold")
+    header.append(f"   topic: {topic_obj.name or 'any'}", style="dim")
+    header.append(f"   from: {', '.join(used) or 'nothing'}", style="dim")
+    console.print(header)
+
+    for level, message in notes:
+        console.print(
+            Text(
+                f"  {'!' if level == 'warn' else 'i'} {message}",
+                style="yellow" if level == "warn" else "dim",
+            )
+        )
+
+    if not chosen:
+        console.print(Text("  no quotes available (see the notes above)", style="red"))
+        return []
+
+    for number, quote in enumerate(chosen, 1):
+        tag = Text(f"\n{number:>3}  ", style="bold")
+        tag.append(f"[{quote.source}]", style="cyan")
+        console.print(tag)
+        console.print(Text(textwrap.indent(quote.text, "     "), style="italic"))
+        if quote.author:
+            console.print(Text(f"         -- {quote.author}", style="bold green"))
+
+    return chosen
+
 if __name__ == "__main__":
     import sys
 
-    if len(sys.argv) != 2:
-        sys.exit("usage: python3 content_quotes.py page.md")
-    provide_quotes(sys.argv[1])
+    if len(sys.argv) == 1:
+        general_quotes()
+    elif len(sys.argv) == 2:
+        provide_quotes(sys.argv[1])
+    else:
+        sys.exit("usage: python3 content_quotes.py [page.md]")

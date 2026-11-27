@@ -199,3 +199,11 @@ if [[ -r $HOMEBREW_PREFIX/share/zsh-syntax-highlighting/zsh-syntax-highlighting.
 fi
 
 [[ -n $ZPROF ]] && zprof
+
+# Fun greeting, only for interactive shells
+if [[ -o interactive ]]; then
+  fastfetch
+  if command -v cowsay >/dev/null 2>&1; then
+    /opt/homebrew/bin/cowsay "Everyone who seems stupid, is, and also half of those who don't seem so are, Quevedo"
+  fi
+fi

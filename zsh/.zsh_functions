@@ -7,8 +7,8 @@
 # 📁 ENVIRONMENT SETUP
 # =============================================================================
 
-# HUGO_CONTENT: The primary directory for your website's Markdown files. 
-# Every other script and tool relies on this environment variable so you only 
+# HUGO_CONTENT: The primary directory for your website's Markdown files.
+# Every other script and tool relies on this environment variable so you only
 # have to change it in one place if your directory structure moves.
 # This is the folder that Syncthing keeps in step with the Arch server where Hugo runs.
 export HUGO_CONTENT="${HUGO_CONTENT:-/Volumes/MacDatosMaster/justtothepoint/content}"
@@ -19,7 +19,7 @@ export HUGO_CONTENT="${HUGO_CONTENT:-/Volumes/MacDatosMaster/justtothepoint/cont
 # =============================================================================
 
 # mkcd <dir>
-# What it does: Creates a directory (including any missing parent directories) 
+# What it does: Creates a directory (including any missing parent directories)
 # and instantly `cd`s into it. 📁
 # Arguments: Requires one argument (the directory name).
 mkcd() {
@@ -28,9 +28,9 @@ mkcd() {
 }
 
 # searchEdit
-# What it does: A fuzzy-finder for your configuration and script files. It searches 
-# specific directories (~/.config, $DOTFILES, ~/.local/bin, ~/Dropbox), ignores 
-# .git folders, and pipes the results into `fzf` with a live code preview powered 
+# What it does: A fuzzy-finder for your configuration and script files. It searches
+# specific directories (~/.config, $DOTFILES, ~/.local/bin, ~/Dropbox), ignores
+# .git folders, and pipes the results into `fzf` with a live code preview powered
 # by `bat`. When you select a file, it opens it in your default $EDITOR. 🔍
 # Safety: Checks if the directories actually exist before trying to search them.
 # Handles spaces in names (-print0 / --read0 / xargs -0).
@@ -51,7 +51,7 @@ searchEdit() {
 # =============================================================================
 
 # calc "<expression>"
-# What it does: A quick command-line calculator powered by the `bc` math library. 
+# What it does: A quick command-line calculator powered by the `bc` math library.
 # Since it uses `-l`, it properly handles decimals (e.g., calc "10/3"). 🧮
 calc() { bc -l <<< "$*" }
 
@@ -59,7 +59,7 @@ calc() { bc -l <<< "$*" }
 alias calc='noglob calc'
 
 # urlencode "<string>"
-# What it does: Takes a raw string and encodes it into a URL-safe format using a 
+# What it does: Takes a raw string and encodes it into a URL-safe format using a
 # quick inline Python 3 script. Spaces become `+`, and special characters are escaped. 🔗
 # Example: urlencode "hello world"  ->  hello+world
 urlencode() {
@@ -72,13 +72,13 @@ urlencode() {
 # =============================================================================
 
 # myripgrep <pattern>
-# What it does: Searches specifically inside your $HUGO_CONTENT directory 
+# What it does: Searches specifically inside your $HUGO_CONTENT directory
 # for a text pattern using `rg` (ripgrep). 🔎
 myripgrep() { rg "$@" "$HUGO_CONTENT/" }
 
 # mysearch <pattern>
-# What it does: Runs `myripgrep` to find the term in your local Hugo files, 
-# AND simultaneously opens your default web browser to run a Google search 
+# What it does: Runs `myripgrep` to find the term in your local Hugo files,
+# AND simultaneously opens your default web browser to run a Google search
 # for that exact term (using your `urlencode` function). 🌐
 mysearch() {
     rg "$@" "$HUGO_CONTENT/"
@@ -86,9 +86,9 @@ mysearch() {
 }
 
 # hugo-image-posts <image-file>
-# What it does: Finds every Hugo Markdown post that references a specific image. 
+# What it does: Finds every Hugo Markdown post that references a specific image.
 # It uses ripgrep to scan all .md files in $HUGO_CONTENT. 🖼️
-# Smart feature: You can pass just the filename (hero.png) or the full path 
+# Smart feature: You can pass just the filename (hero.png) or the full path
 # (/some/path/hero.png). The ${1:t} modifier extracts just the base filename.
 hugo-image-posts() {
   local content="$HUGO_CONTENT"
@@ -113,10 +113,10 @@ hugo-image-posts() {
 # =============================================================================
 
 # ytmp3 <url>
-# What it does: Downloads the audio from a YouTube video and saves it as an MP3 
+# What it does: Downloads the audio from a YouTube video and saves it as an MP3
 # directly into your ~/Music folder. 🎵
 # Dependencies: Requires `yt-dlp` and `ffmpeg` (brew install yt-dlp ffmpeg).
-# Smart feature: It checks if `yt-dlp` exists first. -P sets the download folder 
+# Smart feature: It checks if `yt-dlp` exists first. -P sets the download folder
 # so your shell stays where it is.
 ytmp3() {
     (( $+commands[yt-dlp] )) || { echo "brew install yt-dlp ffmpeg"; return 1; }
@@ -124,7 +124,7 @@ ytmp3() {
 }
 
 # playmp3
-# What it does: Shuffles and plays all MP3 files located in your ~/Music folder 
+# What it does: Shuffles and plays all MP3 files located in your ~/Music folder
 # directly in the terminal (no video window). Quit with 'q'. 🎧
 # Dependencies: Requires `mpv` (brew install mpv).
 playmp3() {
@@ -140,7 +140,7 @@ playmp3() {
 # Archives note: the Oh My Zsh `extract` plugin gives you `extract <file>` and `x <file>`.
 
 # free
-# What it does: Simulates the Linux `free` command on macOS. Prints a quick summary 
+# What it does: Simulates the Linux `free` command on macOS. Prints a quick summary
 # of physical memory and your current memory pressure percentage. 📊
 # Useful to check before loading a big local AI model.
 free() {
@@ -149,7 +149,7 @@ free() {
 }
 
 # killport <port>
-# What it does: Finds whatever process is listening on the specified TCP port 
+# What it does: Finds whatever process is listening on the specified TCP port
 # and forcibly kills it. Extremely useful for zombie dev servers. 💀
 # Arguments: Requires the port number.
 killport() {
@@ -161,7 +161,7 @@ killport() {
 }
 
 # weather [city]
-# What it does: Prints a one-line ASCII weather summary for the given city 
+# What it does: Prints a one-line ASCII weather summary for the given city
 # using wttr.in. If no city is provided, it attempts to guess based on your IP. ☔
 weather() { curl -s "wttr.in/${1:-}?format=3" }
 
@@ -174,28 +174,33 @@ weather() { curl -s "wttr.in/${1:-}?format=3" }
 # 5. If Ghostty refuses to close after 2 seconds, it force-kills it.
 # 6. Finally, tells macOS System Events to shut down the Mac.
 shutdownmac() {
-  ssh -t server 'sudo shutdown -h now'
-  ssh nmaxi@192.168.1.12 "shutdown /s /t 0"
+  # 1. Ask FIRST. (In your old version the two other computers were already switched off when you could still answer "N".)
   if [[ "$1" != "--now" ]]; then
-    printf 'Shut down this Mac now? [y/N] '
+    printf 'Shut down this Mac and the two other computers now? [y/N] '
     read -r reply
     [[ "$reply" =~ ^[Yy]$ ]] || { echo "Cancelled."; return 1; }
   fi
 
-  # Ask Ghostty to quit normally first.
-  osascript -e 'tell application "Ghostty" to quit' >/dev/null 2>&1
+  # 2. The other computers. A failure here must not stop the rest (no `set -e`; every ssh has its own line).
+  ssh -t server 'sudo shutdown -h now'
+  ssh nmaxi@192.168.1.12 "shutdown /s /t 0"
 
-  # Give it a moment, then force-quit if it is still running.
-  sleep 2
-  if pgrep -xq Ghostty; then
-    echo "Ghostty is still running; force-quitting it."
-    osascript -e 'tell application "Ghostty" to quit saving no' >/dev/null 2>&1
-    sleep 1
-    pkill -x Ghostty 2>/dev/null || true
-  fi
+  # 3. This Mac, in the background (nohup: it keeps running even when Ghostty is closed).
+  nohup sh -c '
+      # Unload the launcher agent: nothing will restart it. SIGTERM -> it leaves cleanly.
+      launchctl bootout "gui/$(id -u)/com.mylauncher.app" >/dev/null 2>&1
 
-  # Request a normal macOS shutdown.
-  osascript -e 'tell application "System Events" to shut down'
+      # Ask Ghostty to quit normally first; force it after 2 seconds.
+      osascript -e "tell application \"Ghostty\" to quit" >/dev/null 2>&1
+      sleep 2
+      pkill -9 -ix ghostty 2>/dev/null
+
+      # Anything of the launcher that is still there (started by hand, not by launchd): its command line says mylauncher_app.py.
+      pkill -9 -f mylauncher_app.py 2>/dev/null
+
+      sleep 1
+      osascript -e "tell application \"System Events\" to shut down"
+    ' >/dev/null 2>&1 &
 }
 
 
@@ -205,8 +210,8 @@ shutdownmac() {
 
 # greetings
 # What it does: Runs your `greetings.py` daily briefing script. 👋
-# Note: Runs in a SUBSHELL ( ... ): the cd and the activated virtualenv disappear 
-# when it ends, so your prompt stays where it was. The venv's python is called 
+# Note: Runs in a SUBSHELL ( ... ): the cd and the activated virtualenv disappear
+# when it ends, so your prompt stays where it was. The venv's python is called
 # directly (no `activate` needed).
 greetings() {
   local proj="$HOME/macOS/myPython"
@@ -228,8 +233,14 @@ content_creation() {
 }
 
 # start_remote_webserver
-# What it does: SSHs into your Arch server and interactively runs the 
+# What it does: SSHs into your Arch server and interactively runs the
 # `webserver` command under zsh. 🚀
 start_remote_webserver() {
   ssh -t server -- zsh -lic 'webserver'
+}
+
+myquote() {
+  local proj="$HOME/macOS/myPython"
+  [[ -x "$proj/.venv/bin/python" ]] || { print -u2 "greetings: no virtualenv in $proj (see ~/macOS/docs/docMymac/mypython.md, section 5)"; return 1; }
+  ( cd "$proj" && .venv/bin/python content_quotes.py "$@" )
 }

@@ -13,6 +13,24 @@ So you do not write the mapping twice: the launcher reads the one AeroSpace alre
 What we do: `aerospace workspace C` FIRST, then `open -a App`. If the app is new, AeroSpace puts its window
 on C (where you already are); if it is already running, `open` brings it to the front on C.
 Everything here is optional: with aerospace.enabled = false, or no rule found, the app simply opens.
+
+GUIDED TOUR: from the specific to the general.
+  Rule              one `[[on-window-detected]]` rule reduced to (workspace, app_id, name_regex).
+  find_command()    where is the `aerospace` program? The setting, then PATH (`shutil.which`), then the usual Homebrew places. Why the list?
+                    A program started at LOGIN has a short PATH (no /opt/homebrew/bin), so "it works in my terminal" is not enough.
+                    `next((x for x in places if exists(x)), "")` = the first place that exists, or "" - the idiom for "first match or default".
+  read_rules()      aerospace.toml -> [Rule]. TOML again via tomllib (Python 3.11+; the `try: import tomllib / except ModuleNotFoundError`
+                    at the top keeps older Pythons working, only without this feature).
+                    The `run` line may be a string or a LIST of commands; the regular expression MOVE finds "move-node-to-workspace C"
+                    (allowing options like --focus-follows-window) and captures the workspace name.
+  bundle_id()       an application's identity: the file Contents/Info.plist (a "property list", Apple's settings format) holds
+                    CFBundleIdentifier, e.g. "com.microsoft.VSCode". `plistlib` reads it (the file is binary: open with "rb").
+  workspace_for()   the decision, in priority order: (1) your explicit setting by name, (2) a rule whose app-id equals the bundle id,
+                    (3) a rule whose regular expression matches the app name. First hit wins; "" means "do not move".
+                    A broken user-written regex (`re.error`) is skipped, not fatal.
+  switch_command()  ["aerospace", "workspace", "C"]
+`read_id=bundle_id` as a default parameter lets tests give a fake id reader (no real .app needed).
+Try it:  ml run "code" --dry-run     (with a matching rule the dry run mentions the aerospace workspace switch before `open`; not tested on a Mac)
 """
 
 from __future__ import annotations

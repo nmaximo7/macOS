@@ -125,6 +125,31 @@ class Other(Base):
         self.auto().restart()
         self.assertEqual(self.launchctl.calls, [["kickstart", "-k", "gui/501/com.test.launcher"]])
 
+    def test_stop_unloads_but_keeps_the_file(self):
+        a = self.auto()
+        a.install()
+        self.launchctl.calls.clear()
+        lines = self.auto().stop()
+        self.assertTrue(a.file.exists(), "the agent file stays: it starts again at the next login")
+        self.assertFalse(self.launchctl.loaded)
+        self.assertIn(["bootout", "gui/501/com.test.launcher"], self.launchctl.calls)
+        self.assertTrue(any("next login" in line for line in lines))
+
+    def test_stop_when_not_loaded_does_nothing(self):
+        self.assertEqual(self.auto().stop(), ["not loaded: nothing to stop"])
+        self.assertNotIn("bootout", [c[0] for c in self.launchctl.calls])
+
+    def test_stop_dry_run_runs_nothing(self):
+        lines = Autostart(self.config, self.config_file, runner=self.launchctl, home=self.tmp, uid=501, dry_run=True).stop()
+        self.assertTrue(lines[0].startswith("would run: launchctl bootout"))
+        self.assertEqual(self.launchctl.calls, [])
+
+    def test_the_agent_restarts_after_a_kill_but_not_after_a_clean_exit(self):
+        """The reason `stop` exists: KeepAlive SuccessfulExit=false. A signal kill counts as a failure, so launchd would start a new copy."""
+        from myautostart import build_plist
+        agent = build_plist(self.config, "/py", self.config_file)
+        self.assertEqual(agent["KeepAlive"], {"SuccessfulExit": False})
+
     def test_status_not_loaded(self):
         self.assertIn("not loaded", self.auto().status()[-1])
 

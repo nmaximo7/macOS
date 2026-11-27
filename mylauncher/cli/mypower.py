@@ -13,6 +13,18 @@ WHAT WE DO INSTEAD (a shell script started in the background, so it does not dep
 The launcher itself is never killed by this script (it would take the script with it); it leaves by itself when
 macOS announces the power-off (app/mylauncher_app.py).
 With `power.force` = false only steps 1 and 4 happen (the polite way: macOS asks, and may wait for you).
+
+GUIDED TOUR: this file does NOT restart anything. It only PLANS and WRITES A SCRIPT; myactions._power starts it. Splitting "decide" from "do"
+makes the dangerous part testable: a test checks the script's text and nothing is ever shut down.
+  other_instances()  `pgrep -f mylauncher_app.py` lists processes whose command line contains that name; we remove our own pids.
+  already_asked / mark_asked   a LOCK FILE: its modification time says "a restart was requested N seconds ago". A second request within
+                     120 s is ignored. The file is also what the window reads to accept macOS's "quit" request (otherwise it refuses to quit).
+                     Failing to write the marker is ignored on purpose: a safety feature must never block the thing it protects.
+  power_script()     the script as lines of text:  ask each app to quit (in the background with &) -> sleep(grace) -> kill -KILL the pids still alive
+                     (`kill -0 PID` only TESTS whether a process exists; `&&` runs the kill only if it does) -> sleep 1 -> the final restart/shutdown.
+  plan(), own_pids() the list of apps to close, and "this process and its parent" - never touched, or the script would kill its own launcher.
+`chr(34)` is the double-quote character: inside an f-string of older Pythons you cannot reuse the same quote, so we ask for it by number.
+Try it:  ml run --id cmd:shutdown --dry-run     (prints what would happen; nothing happens)
 """
 
 from __future__ import annotations

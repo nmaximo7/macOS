@@ -220,5 +220,4 @@ config-file = ?local.conf
 
 # Optional: notification when a long command finishes (newer versions only;
 # confirm with `ghostty +show-config --default --docs | grep -i notify`).
-# notify-on-command-finish = unfocused
-initial-command = /Users/nmaximo7/macOS/scripts/ghostty-dashboard
+notify-on-command-finish = unfocused

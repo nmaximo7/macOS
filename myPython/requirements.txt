@@ -37,7 +37,7 @@ h11==0.16.0
     # via httpcore
 httpcore==1.0.9
     # via httpx
-httpx==0.28.1
+httpx==0.29.0
     # via ollama
 idna==3.20
     # via

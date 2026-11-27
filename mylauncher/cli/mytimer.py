@@ -4,6 +4,25 @@ mytimer.py - `timer 90`, `timer 5m`, `timer 1h30m`, `timer 1:30`: a notification
 The timer is a small shell script started in the background (its own session, so it goes on if the launcher
 restarts). It does NOT use one long `sleep`: it looks at the clock every second, so if the Mac sleeps in
 the middle, the timer rings as soon as it wakes up instead of late by the whole sleep.
+
+GUIDED TOUR (four layers):
+  1. PARSING  parse_duration(): text -> seconds, or None. "90", "5m", "1h30m", "1.5m", "1:30", "1:02:03", "two words" all handled.
+     Two formats: with a colon (minutes:seconds or h:m:s, only digits) or with units. For the units form we first REPLACE words with letters
+     (WORDS: "minutes" -> "m"; longer words first, so "minutes" is replaced before "min"), then read pieces with the regular expression
+        PART = (\\d+(?:\\.\\d+)?)\\s*([hms]?)      a number, optional decimals, optional spaces, then an optional unit letter
+     in a loop: `PART.match(text, position)` matches AT a position, `m.end()` says where it stopped, then we skip spaces. A leftover that
+     does not match means "not a duration" (None). The rule `len(parts) > 1 and any unit is missing` rejects "1h 30" (ambiguous).
+     `divmod(a, b)` gives (a // b, a % b) at once: divmod(5400, 3600) = (1, 1800).
+  2. DISPLAY  format_duration (5400 -> "1h 30m"), clock (90 -> "00:01:30"; the +0.999 makes 0.2 s left still show 00:00:01).
+  3. STATE    one small JSON file per running timer in a folder: start_file, running, cancel. The window and the menu bar read the folder every
+     second; the timer's own SCRIPT checks that its file still exists - deleting the file IS the cancel button ("a file as a message").
+     `running()` also cleans up dead timers (an end time more than 2 minutes in the past: a reboot killed the script).
+     cancel() uses `Path(timer_id).name`, which strips any folder part: "../../x" cannot escape the timers folder.
+  4. THE SCRIPT  timer_script(): lines of shell. `end=$(( $(date +%s) + N ))` then `while [ now -lt end ]; do sleep 1; done` - it asks the CLOCK every
+     second, so a sleeping Mac rings on waking. Then notify (script_line), ring (afplay in a loop; `|| printf '\\a'` falls back to the terminal bell),
+     `say` a sentence, and optionally raise and restore the system volume. Everything quoted with shlex.quote.
+Try it:  python3 -c "import sys; sys.path.insert(0,'cli'); import mytimer as t; print(t.parse_duration('1h30m'), t.parse_duration('1:30'), t.clock(90))"
+         ->  5400 90 00:01:30
 """
 
 from __future__ import annotations

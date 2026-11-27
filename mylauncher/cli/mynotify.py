@@ -15,6 +15,17 @@ Three ways to show a notification, chosen by `notifications.method` in conf/myco
   auto (default)     terminal-notifier if it is installed, otherwise osascript.
 
 `ml notify-test` sends a test and tells what happened.
+
+GUIDED TOUR: four functions, each feeding the next.
+  resolve(method)  "auto" -> which program will REALLY be used (terminal-notifier if installed, else osascript). Returns (name, path).
+  argv(...)        the command line (a LIST of words) for that program; [] means "none". Note the two different ways to talk to them:
+                   terminal-notifier takes options (-title, -message); osascript takes ONE AppleScript line:
+                       display notification "text" with title "title" subtitle "sub"
+  send(...)        run it through the injected runner and return (ok, detail). `ok` means "the helper accepted it", not "you saw it".
+  script_line(...) the same idea but as ONE LINE of SHELL TEXT, for the end of a background script (timers, execute): there the message is
+                   in the shell variable $msg, which the script sets just before ("finished" / "failed ...").
+`which=shutil.which` as a DEFAULT PARAMETER is injection again: tests pass a fake `which` so they never depend on what is installed.
+Every user-provided text is passed through applescript_quote (a quote in a title must not end the AppleScript string early) or shlex.quote.
 """
 
 from __future__ import annotations

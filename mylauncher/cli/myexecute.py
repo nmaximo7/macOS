@@ -23,6 +23,23 @@ How the command is run (everything can be changed in the `execute` section of my
     /bin/zsh -lc "[ -f ~/.zsh_functions ] && . ~/.zsh_functions; ( YOUR COMMAND ) ..."
  -l  a login shell, so Homebrew and your PATH are there;  the files in `execute.source` (default
  ~/.zsh_functions) are loaded first, so your zsh functions exist. No -i: no aliases, no slow prompt setup.
+
+GUIDED TOUR: (1) ExecEntry + parse_execute/load_execute: the same shape as myedit.py (it even re-uses parse_text_field);
+(2) the SCRIPTS: three functions that build the text of a small shell script; (3) build_execute_items: entries -> rows.
+
+WHY BUILD A SCRIPT AS TEXT? We hand zsh one string to run. Writing it as a list of lines makes each rule visible:
+    ( [ -f ~/.zsh_functions ] && . ~/.zsh_functions; YOUR COMMAND
+    )
+    code=$?                                         <- remember how it ended (0 = success)
+    if [ "$code" -eq 0 ]; then msg="finished"; ...  <- background: notify success or failure
+    exit "$code"                                    <- the launcher learns the real exit code
+Three details worth understanding:
+  * The command runs inside ( ... ), a SUB-SHELL: if your command contains `exit 3`, only the sub-shell exits, so the lines AFTER it (the
+    notification) still run.
+  * The backslash-n (newline) before `)` is deliberate: if your command ends with a `# comment`, a `)` on the same line would be swallowed by the comment.
+  * `[ -f FILE ] && . FILE;` = "if the file exists, load it" (`.` is `source`). A missing file is not an error.
+Two modes: background (output to a log, notification at the end) or terminal (a window that waits for Enter so you can read the output).
+`plain()` and `shlex.quote()` are the two protections: quote anything that becomes part of a shell line, never trust a name.
 """
 
 from __future__ import annotations
@@ -40,6 +57,7 @@ from mynotify import script_line
 
 # {command} is replaced by the whole script. Ghostty is started with `open -na` (a macOS app is not
 # started by running its program directly); -e = "run this program instead of your shell".
+# A tuple of words, with the placeholder "{command}" replaced by the whole script at run time (see myactions.execute_terminal).
 DEFAULT_TERMINAL_COMMAND = ("open", "-na", "Ghostty", "--args", "-e", "/bin/zsh", "-lc", "{command}")
 DEFAULT_SHELL = ("/bin/zsh", "-lc")
 DEFAULT_SOURCE = ("~/.zsh_functions",)
@@ -51,6 +69,7 @@ class ExecEntry:
     description: str
     emoji: str
     command: str
+    # `bool | None` = three states: True, False, or None ("not said: use the global setting"). Three states cannot be a plain bool.
     terminal: bool | None = None  # None = use the default of the configuration
     confirm: bool = False
 
@@ -105,6 +124,8 @@ def source_prefix(source_files) -> str:
     return "".join(parts)
 
 
+# `re.sub(r'["\\$`\n]', "", text)` deletes every double quote, backslash, dollar sign, backtick and newline: the characters that could
+# break out of a shell or AppleScript string. A name is only DISPLAYED, so removing them costs nothing and removes a whole attack class.
 def plain(text: str) -> str:
     """A name safe inside shell and AppleScript double quotes: quotes, backslashes, $ and ` are removed."""
     return re.sub(r'["\\$`\n]', "", text)
