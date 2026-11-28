@@ -418,5 +418,9 @@
   "emoji": {
     "favorites_file": "~/.config/mylauncher/emoji-favorites.json",
     "paste": true
+  },
+  "favorites": {
+    "word": "favorites",
+    "file": "favorites.json"
   }
 }

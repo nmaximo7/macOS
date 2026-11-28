@@ -156,19 +156,24 @@ def terminal_script(command: str, source_files) -> str:
     )
 
 
-def build_execute_items(config) -> list:
+def build_execute_items(config, entries=None, word=None, id_prefix: str = "execute") -> list:
+    """The rows of `execute` (conf/execute.json). Step 20.17: the same builder serves `favorites` (conf/favorites.json) through three optional
+    parameters: which entries, which launcher word (what Tab writes), and the prefix of the ids. Nothing else differs: the rows run exactly like `execute`
+    rows (terminal or background, confirm), so favorites needed NO new action."""
+    entries = config.execute_entries if entries is None else entries
+    word = config.execute_word if word is None else word
     items = []
-    for entry in config.execute_entries:
+    for entry in entries:
         terminal = config.execute_terminal if entry.terminal is None else entry.terminal
         subtitle = f"{entry.description}  ·  {entry.command}" if entry.description else entry.command
         items.append(
             Item(
-                id=f"execute:{entry.name}",
+                id=f"{id_prefix}:{entry.name}",
                 title=entry.name,
                 kind="execute",
                 action="execute_terminal" if terminal else "execute_background",
                 target=entry.command,
-                complete=f"{config.execute_word} {entry.name}",  # what Tab writes
+                complete=f"{word} {entry.name}",  # what Tab writes
                 confirm=entry.confirm,
                 keywords=tuple(k for k in (entry.description, entry.command) if k),
                 subtitle=subtitle,
@@ -177,3 +182,8 @@ def build_execute_items(config) -> list:
             )
         )
     return items
+
+
+def build_favorites_items(config) -> list:
+    """The rows of `favorites`: your short list (conf/favorites.json: shutdown of the three computers, content_creation, the prayer posts...)."""
+    return build_execute_items(config, entries=config.favorites_entries, word=config.favorites_word, id_prefix="favorites")

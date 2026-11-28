@@ -198,6 +198,9 @@ class Config:
     execute_terminal_command: tuple = DEFAULT_TERMINAL_COMMAND  # {command} is replaced by the script
     execute_log_dir: Path = Path("~/Library/Logs/mylauncher/execute").expanduser()
     execute_notify: bool = True  # background commands: a notification says how they ended
+    favorites_word: str = "favorites"  # Step 20.17: your short list of commands, same format and same behaviour as `execute`
+    favorites_path: Path = Path("favorites.json")
+    favorites_entries: tuple = ()  # tuple of ExecEntry (parse_execute: the same checks as execute.json)
     secret_word: str = "secret"  # lists the secrets (values hidden)
     secret_edit_word: str = "keep_secret"  # opens the secret file in the editor
     secret_file: Path = Path("~/.config/mylauncher/secrets.env").expanduser()  # outside the repository!
@@ -332,11 +335,12 @@ def load_config(path: Path) -> Config:
         raise ConfigError(f"{path} is not valid JSON (line {exc.lineno}, column {exc.colno}): {exc.msg}") from None
     config = parse_config(data, path)  # PART 4: all the checking happens in here
     # The quicklinks live in their own file (conf/quicklinks.json); the keyword of the "kill" mode is reserved.
-    reserved = (config.kill_word, config.run_word, config.help_word, config.edit_word, config.execute_word, config.secret_word, config.secret_edit_word, "emoji")
+    reserved = (config.kill_word, config.run_word, config.help_word, config.edit_word, config.execute_word, config.favorites_word, config.secret_word, config.secret_edit_word, "emoji")
     links = load_quicklinks(config.quicklinks_path, reserved=reserved)
     # `replace` builds a COPY of the frozen Config with some fields changed (we cannot assign to it).
     return replace(
-        config, quicklinks=links, edit_entries=load_edit(config.edit_path), execute_entries=load_execute(config.execute_path)
+        config, quicklinks=links, edit_entries=load_edit(config.edit_path), execute_entries=load_execute(config.execute_path),
+        favorites_entries=load_execute(config.favorites_path),
     )
 
 
@@ -731,6 +735,13 @@ def parse_config(data, path: Path) -> Config:
     exec_log_dir = Path(_check(exec_section.get("log_dir", "~/Library/Logs/mylauncher/execute"), str, "execute.log_dir")).expanduser()
     exec_notify = _check(exec_section.get("notify", True), bool, "execute.notify")
 
+    fav_section = data.get("favorites", {})
+    _check(fav_section, dict, "favorites")
+    favorites_word = _check(fav_section.get("word", "favorites"), str, "favorites.word").lower()
+    fav_file = Path(_check(fav_section.get("file", "favorites.json"), str, "favorites.file")).expanduser()
+    if not fav_file.is_absolute():
+        fav_file = Path(path).parent / fav_file
+
     emoji_section = data.get("emoji", {})
     _check(emoji_section, dict, "emoji")
     emoji_favorites = Path(_check(emoji_section.get("favorites_file", "~/.config/mylauncher/emoji-favorites.json"), str, "emoji.favorites_file")).expanduser()
@@ -764,12 +775,12 @@ def parse_config(data, path: Path) -> Config:
     # The "magic words" of the launcher window (run, kill, help, edit, execute, secret, ...) must all
     # differ, otherwise typing one of them would be ambiguous. `set(words)` drops duplicates, so if
     # it is shorter than the list, two words were equal.
-    words = [run_word, kill_word, help_word, edit_word, execute_word, secret_word, secret_edit_word]
-    for word_name, word in (("edit.word", edit_word), ("execute.word", execute_word), ("secret.word", secret_word), ("secret.edit_word", secret_edit_word)):
+    words = [run_word, kill_word, help_word, edit_word, execute_word, favorites_word, secret_word, secret_edit_word]
+    for word_name, word in (("edit.word", edit_word), ("execute.word", execute_word), ("favorites.word", favorites_word), ("secret.word", secret_word), ("secret.edit_word", secret_edit_word)):
         if not word or len(word.split()) != 1:
             raise ConfigError(f"{word_name} must be ONE word")
     if len(set(words)) != len(words):
-        raise ConfigError("apps.word, kill.word, help.word, edit.word, execute.word, secret.word and secret.edit_word must all be different words")
+        raise ConfigError("apps.word, kill.word, help.word, edit.word, execute.word, favorites.word, secret.word and secret.edit_word must all be different words")
     defaults = Config.__dataclass_fields__
     help_paths = {}
     for setting, field_name in (("aliases_file", "help_aliases_file"), ("functions_file", "help_functions_file"),
@@ -934,6 +945,8 @@ def parse_config(data, path: Path) -> Config:
         execute_terminal_command=terminal_command,
         execute_log_dir=exec_log_dir,
         execute_notify=exec_notify,
+        favorites_word=favorites_word,
+        favorites_path=fav_file,
         help_cache_seconds=cache_seconds,
         **help_paths,
     )

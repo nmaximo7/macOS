@@ -32,6 +32,7 @@ MODE_LABELS = {
     "emoji_remove": "⭐ Remove an emoji from my_favorites",
     "secret_set": "🔐 Save a secret in the Keychain",
     "execute": "▶️ Execute",
+    "favorites": "⭐ Favorites",
 }
 
 

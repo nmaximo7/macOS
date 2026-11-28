@@ -81,7 +81,7 @@ from myconfig import Config, ConfigError, find_config_path, load_config
 import myespanso
 from myexpander import describe_groups, group_of, load_snippets, preview
 from myedit import build_edit_items
-from myexecute import build_execute_items
+from myexecute import build_execute_items, build_favorites_items
 from mysecret import add_name, scrub_names, keychain_get, set_notes, build_secret_items, edit_item, file_problems, read_secrets, table as secret_table
 from mynotify import resolve as resolve_notifier, send as send_notification
 import myversion
@@ -209,6 +209,18 @@ def build_items(config: Config) -> list:
             complete=f"{config.execute_word} ",
             subtitle="Commands of execute.json: scripts, maintenance, briefing",
             icon="▶️",
+        )
+    )
+    items.append(
+        Item(
+            id=f"prefix:{config.favorites_word}",
+            title=f"Favorites ({config.favorites_word})",
+            kind="prefix",
+            action="prefix_hint",
+            keywords=(config.favorites_word, "favorite", "favourites"),
+            complete=f"{config.favorites_word} ",
+            subtitle="Your short list (conf/favorites.json): shut down the three computers, content creation, the prayer posts",
+            icon="⭐",
         )
     )
     # the fixed tool words, written as a table: (word, title, subtitle, icon). One loop builds six items.
@@ -489,7 +501,7 @@ def detect_mode(config: Config, query: str) -> tuple:
     """(mode, n): what the launcher understood and how many characters at the start of the query
     make up the recognised command (the window paints them in colour).
 
-    mode is one of: "normal", "run", "kill", "help", "edit", "execute", "secret", "keep_secret", "quicklink", "snippets",
+    mode is one of: "normal", "run", "kill", "help", "edit", "execute", "favorites", "secret", "keep_secret", "quicklink", "snippets",
     "tool", "emoji", "emoji_add", "emoji_remove", "secret_set".
 
     Examples (default settings):
@@ -523,6 +535,8 @@ def detect_mode(config: Config, query: str) -> tuple:
         return "edit", lead + len(word)
     if word == config.execute_word:
         return "execute", lead + len(word)
+    if word == config.favorites_word:
+        return "favorites", lead + len(word)
     if parts:
         for link in config.quicklinks:
             if word == link.keyword:
@@ -621,8 +635,8 @@ def _search(config: Config, query: str, limit: int | None = None, runner=default
         found = rank([i for i in items if i.kind == "secret" or i.id.startswith("secret-problem:")], rest, config.max_browse_results, **{**options, "fuzzy": False})
         return found  # nothing found: an empty list (a value is never searched)
 
-    if mode in ("edit", "execute"):  # the lists of edit.json / execute.json, filtered by what follows the word
-        items = build_edit_items(config) if mode == "edit" else build_execute_items(config)
+    if mode in ("edit", "execute", "favorites"):  # the lists of edit.json / execute.json / favorites.json, filtered by what follows the word
+        items = {"edit": build_edit_items, "execute": build_execute_items, "favorites": build_favorites_items}[mode](config)
         if not rest.strip():  # nothing typed yet: the order of the file
             return [Match(i, 100) for i in items[: config.max_browse_results]]
         return rank(items, rest, config.max_browse_results, **{**options, "fuzzy": False})
@@ -781,6 +795,11 @@ def cmd_run(args, config: Config, runner=default_runner, ask=input, sleep=time.s
     else:
         if not typed.strip():
             return _fail(args, "say what to run, for example:  run obsidian   (or use --id)", code=2)
+        # Step 20.17 SAFETY: a list word alone ("favorites", "execute") shows a LIST in the window; as `ml run` it would run the FIRST entry of the list
+        # (for favorites: the shutdown!). So we refuse and say how to choose.
+        mode, _n = detect_mode(config, typed)
+        if mode in ("favorites", "execute") and not typed.strip().split(maxsplit=1)[1:]:
+            return _fail(args, f"say which one, for example:  run '{typed.strip()} <name>'   (the list: ml search -- {typed.strip()})", code=2)
         matches = _search(config, typed, limit=1, runner=runner)
         if not matches:
             return _fail(args, f"no match for {typed!r}")
@@ -1758,7 +1777,8 @@ def cmd_doctor(args, config: Config | None = None, config_error: str = "", **_) 
         results.append(
             ("✔" if exists else "!", f"quicklinks: {len(config.quicklinks)} in {config.quicklinks_path}" + ("" if exists else " (file not found: no quicklinks)"))
         )
-        for label, path_, entries in (("edit", config.edit_path, config.edit_entries), ("execute", config.execute_path, config.execute_entries)):
+        for label, path_, entries in (("edit", config.edit_path, config.edit_entries), ("execute", config.execute_path, config.execute_entries),
+                                      ("favorites", config.favorites_path, config.favorites_entries)):
             there = path_.is_file()
             results.append(("✔" if there else "!", f"{label}: {len(entries)} entr{'y' if len(entries) == 1 else 'ies'} in {path_}" + ("" if there else " (file not found)")))
         editor = config.edit_editor

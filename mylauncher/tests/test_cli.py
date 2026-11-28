@@ -41,12 +41,12 @@ class Listing(CliCase):
         self.assertEqual(code, 0)
         self.assertEqual(ids[0], "cmd:shutdown")
         self.assertIn("app:Obsidian", ids)
-        self.assertEqual(len(ids), 18)  # shutdown, 11 command words (kill ... run, about, timer, explain, deep_study, describe_image), 4 apps (copy_image_topic too)
+        self.assertEqual(len(ids), 19)  # shutdown, 12 command words (favorites added in 20.17) (kill ... run, about, timer, explain, deep_study, describe_image), 4 apps (copy_image_topic too)
 
     def test_list_text(self):
         code, out, _ = self.call("list")
         self.assertIn("Run Obsidian", out)
-        self.assertIn("18 item(s)", out)
+        self.assertIn("19 item(s)", out)
 
 
 class Searching(CliCase):

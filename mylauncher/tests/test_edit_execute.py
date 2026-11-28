@@ -377,6 +377,108 @@ class ConfigSections(unittest.TestCase):
             self.parse(edit={"word": "two words"})
 
 
+class Favorites(EditExecuteCase):
+    """Step 20.17: `favorites` = your short list (conf/favorites.json), built on the `execute` machinery."""
+
+    LIST = [
+        {"description": "shutdown, switch off the three computers", "emoji": "🔌", "command": "shutdownmac --now", "terminal": True, "confirm": True},
+        {"description": "content_creation, check and improve a Hugo page", "emoji": "✍️", "command": "content_creation", "terminal": True},
+        {"description": "prayer_website, publish today's prayer", "emoji": "🌐", "command": "bash ~/macOS/mylauncher/cli/ml daily-gospel-post", "terminal": True, "confirm": True},
+        {"description": "prayer_facebook, today's prayer as a Facebook post", "emoji": "📘", "command": "bash ~/macOS/mylauncher/cli/ml daily-gospel-facebook", "terminal": True},
+    ]
+
+    def setUp(self):
+        super().setUp()
+        self.put("favorites.json", self.LIST)
+        self.put("execute.json", [{"description": "other, not a favorite", "command": "true"}])
+        self.configure()
+
+    def test_the_word_lists_the_favorites_in_the_order_of_the_file(self):
+        data = self.search("favorites")
+        self.assertEqual((data["mode"], data["highlight"]), ("favorites", 9))
+        self.assertEqual([r["title"] for r in data["results"]], ["shutdown", "content_creation", "prayer_website", "prayer_facebook"])
+        self.assertNotIn("other", [r["title"] for r in data["results"]])  # execute.json is a different list
+
+    def test_rows_ids_badges_and_tab(self):
+        rows = {r["title"]: r for r in self.search("favorites")["results"]}
+        self.assertEqual(rows["shutdown"]["id"], "favorites:shutdown")
+        self.assertEqual((rows["shutdown"]["icon"], rows["shutdown"]["badge"], rows["shutdown"]["confirm"], rows["shutdown"]["action"]),
+                         ("🔌", "Terminal", True, "execute_terminal"))
+        self.assertFalse(rows["prayer_facebook"]["confirm"])
+        self.assertEqual(self.search("favorites")["completion"], "favorites shutdown")  # Tab keeps the word
+        self.assertEqual(self.search("favorites cont")["completion"], "favorites content_creation")
+
+    def test_filter(self):
+        self.assertEqual(sorted(self.titles("favorites prayer")), ["prayer_facebook", "prayer_website"])  # both; the order between equal matches is not promised
+        self.assertEqual(self.titles("favorites facebook"), ["prayer_facebook"])
+
+    def test_the_hint_row_is_found_by_typing_part_of_the_word(self):
+        self.assertIn("Favorites (favorites)", self.titles("favor"))
+
+    def test_the_shutdown_asks_first_and_runs_nothing_when_you_say_no(self):
+        code, _, _ = self.call("run", "favorites", "shutdown", answers=["n"])
+        self.assertNotEqual(code, 0)
+        self.assertEqual((self.spawned, self.runner.calls), ([], []))
+        code, _, _ = self.call("run", "favorites", "shutdown", answers=["y"])
+        self.assertEqual(code, 0)
+        command = self.runner.calls[-1]
+        self.assertEqual(command[:4], ["open", "-na", "Ghostty", "--args"])
+        self.assertIn("shutdownmac --now", command[-1])
+        self.assertIn(".zsh_functions", command[-1])  # your functions file is loaded first: that is where shutdownmac lives
+
+    def test_a_list_word_alone_never_runs_the_first_entry(self):
+        for word in ("favorites", "execute"):
+            with self.subTest(word=word):
+                code, out, err = self.call("run", word, "--yes")
+                self.assertEqual(code, 2)
+                self.assertIn("say which one", err + out)
+                self.assertEqual((self.spawned, self.runner.calls), ([], []))
+
+    def test_dry_run_shows_the_command_and_starts_nothing(self):
+        code, out, _ = self.call("run", "favorites", "content", "--dry-run")
+        self.assertEqual(code, 0)
+        self.assertIn("content_creation", out)
+        self.assertEqual((self.spawned, self.runner.calls), ([], []))
+
+    def test_the_prayer_favorites_call_the_real_ml_subcommands(self):
+        import mylauncher as M
+        names = [a for a in M.make_parser()._actions if a.__class__.__name__ == "_SubParsersAction"][0].choices
+        for entry in self.LIST[2:]:
+            self.assertIn(entry["command"].split()[-1], names)  # daily-gospel-post / daily-gospel-facebook exist (underscores would not)
+
+    def test_the_shipped_list_has_the_four_favorites(self):
+        from myexecute import load_execute
+        root = Path(__file__).resolve().parent.parent
+        for where in ("conf", "defaults"):
+            entries = load_execute(root / where / "favorites.json")
+            self.assertEqual([e.name for e in entries], ["shutdown", "content_creation", "prayer_website", "prayer_facebook"], where)
+            self.assertEqual([e.confirm for e in entries], [True, False, True, False], where)
+            self.assertTrue(all(e.terminal for e in entries), where)
+
+    def test_the_word_cannot_clash_with_another(self):
+        self.configure(favorites={"word": "execute"})
+        code, out, err = self.call("search", "x")
+        self.assertEqual(code, 2)
+        self.assertIn("different words", err + out)
+
+    def test_a_missing_file_means_an_empty_list_and_doctor_reports_it(self):
+        (self.tmp / "favorites.json").unlink()
+        self.assertEqual(self.titles("favorites"), [])
+        code, out, _ = self.call("doctor")
+        self.assertIn("favorites: 0 entries", out)
+        self.assertIn("file not found", out)
+
+    def test_a_mistake_in_the_file_names_it(self):
+        self.put("favorites.json", [{"description": "x"}])
+        code, out, err = self.call("search", "x")
+        self.assertEqual(code, 2)
+        self.assertIn("favorites.json[0]", err + out)
+
+    def test_help_has_the_word(self):
+        code, out, _ = self.call("help", "launcher")
+        self.assertIn("favorites", out)  # (the GUI / CLI / Example lines of every word are checked by DocsStayComplete in test_step19)
+
+
 class FilesAndDoctor(EditExecuteCase):
     def test_bad_json_names_the_file(self):
         (self.tmp / "edit.json").write_text("[{", encoding="utf-8")
